@@ -1,0 +1,9 @@
+<!-- navigator_launch_file.launch -->
+<launch>
+
+  <!-- Launch the navigator.py script -->
+  <node name="image_detector_node" pkg="mattbot_image_detection" type="detect_coco.py" output="log">
+  
+  </node>
+
+</launch>
