@@ -1,9 +1,11 @@
 <!-- navigator_launch_file.launch -->
 <launch>
 
+<arg name="weights_file" default="$(find mattbot_image_detection)/weights/yolov8n.pt"/>
+
   <!-- Launch the navigator.py script -->
   <node name="image_detector_node" pkg="mattbot_image_detection" type="detect_coco.py" output="log">
-  
+    <param name="weights_file" value="$(arg weights_file)" />
   </node>
 
 </launch>

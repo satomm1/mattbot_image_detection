@@ -27,10 +27,11 @@ def callback(data):
 
 
 if __name__ == '__main__':
-    model = YOLO('yolov8n.pt')
-
     # Initialize the ROS node
     rospy.init_node('image_detection', anonymous=True)
+
+    weights_file = rospy.get_param('~weights_file')
+    model = YOLO(weights_file)
 
     # Create the publisher that will show image with bounding boxes
     publisher = rospy.Publisher('/camera/color/image_with_boxes', Image, queue_size=1)

@@ -163,6 +163,7 @@ include_directories(
 ## in contrast to setup.py, you can choose the destination
 catkin_install_python(PROGRAMS
   scripts/detect_coco.py
+  scripts/detect_cone.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
