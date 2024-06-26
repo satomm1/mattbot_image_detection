@@ -30,7 +30,7 @@ if __name__ == '__main__':
     # Initialize the ROS node
     rospy.init_node('image_detection', anonymous=True)
 
-    weights_file = rospy.get_param('~weights_file')
+    weights_file = rospy.get_param('~weights_file', 'yolov8n-seg.pt')
     model = YOLO(weights_file)
 
     # Create the publisher that will show image with bounding boxes
