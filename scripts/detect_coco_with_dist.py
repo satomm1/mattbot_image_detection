@@ -1,12 +1,21 @@
 import rospy
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import Image, CameraInfo
 from vision_msgs.msg import Detection3D, Detection3DArray, BoundingBox3D, ObjectHypothesisWithPose
 from geometry_msgs.msg import PoseWithCovariance
 import message_filters
+import tf
+from tf.transformations import euler_from_quaternion
 
 from ultralytics import YOLO
 import numpy as np
 import cv2
+import time
+
+import json
+import os
+
+from confluent_kafka import Producer
+from confluent_kafka.admin import AdminClient, NewTopic
 
 def depth_callback(data):
     # Convert to numpy array
@@ -69,12 +78,6 @@ def image_callback(data):
         # Write estimated depth on the image
         image_with_boxes = cv2.putText(image_with_boxes, '{}: {:.2f} m'.format(class_name, estimated_depth), (x[0]+10, y[0]+50), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
 
-        # detection = Detection3D()
-        # detection.results.hypothesis.class_id = class_num
-        # detection.results.hypothesis.score = results[0].boxes.conf[i].item()
-
-        # detected_pose = PoseWithCovariance()
-        # TODO...
 
     # Create the ROS Image and publish it
     image_msg = Image()
@@ -88,6 +91,8 @@ def image_callback(data):
     publisher.publish(image_msg)
 
 def unifiedCallback(rgb_data, depth_data):
+    start_time = time.time()
+
     # Get the image from the message
     image = np.frombuffer(rgb_data.data, dtype=np.uint8).reshape(rgb_data.height, rgb_data.width, -1)
 
@@ -104,11 +109,8 @@ def unifiedCallback(rgb_data, depth_data):
     if num_detected > 0:
         # Convert depth image to numpy array
         depth = np.frombuffer(depth_data.data, dtype=np.uint16).reshape(depth_data.height, depth_data.width)
-
-    # detection_array = Detection3DArray()
-    # detection_array.header.stamp = rospy.Time.now()
-    # detection_array.header.frame_id = 'camera_link'
-
+    
+    data_dict = {}
     for i in range(num_detected):
         class_num = results[0].boxes.cls[i].item()
         class_name = model.names[class_num]
@@ -116,20 +118,67 @@ def unifiedCallback(rgb_data, depth_data):
         x = results[0].masks.xy[i][:, 0].astype(int)
         y = results[0].masks.xy[i][:, 1].astype(int)
 
+        X = (x - cx) * depth[y, x] / fx
+        Y = (y - cy) * depth[y, x] / fy
+
         depth_values = depth[y, x]
 
         # Remove zero depth values
         indx = np.where(depth_values > 0)
-        depth_values = depth_values[indx]
 
-        estimated_depth = np.mean(depth_values)/1000  # meters
-        print('Estimated depth of {} is {} meters'.format(class_name, estimated_depth))
+        if len(indx[0]) == 0:
+            object_dict = {}
+            object_dict['class_name'] = class_name
+            object_dict['depth'] = 0.0
+            object_dict['x_min'] = 0.0
+            object_dict['y_min'] = 0.0
+            object_dict['x_max'] = 0.0
+            object_dict['y_max'] = 0.0
+            object_dict['x_map'] = 0.0
+            object_dict['y_map'] = 0.0
+        else:
+            depth_values = depth_values[indx]
+            X = X[indx]/1000  # meters
+            Y = Y[indx]/1000  # meters
 
-        # Write estimated depth on the image
-        image_with_boxes = cv2.putText(image_with_boxes, '{}: {:.2f} m'.format(class_name, estimated_depth), (x[0]+10, y[0]+50), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
+            estimated_depth = np.mean(depth_values)/1000  # meters
+            print('Estimated depth of {} is {} meters'.format(class_name, estimated_depth))
 
-        # detection = Detection3D()
-        # detection.results.hypothesis.class_id = class_num
+            # Get map to camera_link transform
+            (trans, rot) = tf_listener.lookupTransform("/map", "/camera_link", rospy.Time(0))
+            x_camera = trans[0]
+            y_camera = trans[1]
+            _, _, theta_camera = euler_from_quaternion(rot)
+            theta_camera = theta_camera
+            print("Theta camera: ", theta_camera)
+
+            x_min = np.min(X)
+            y_min = np.min(Y)
+            x_max = np.max(X)
+            y_max = np.max(Y)
+
+            x_center = (x_min + x_max) / 2
+            y_center = (y_min + y_max) / 2
+
+            theta_object = np.arctan2(x_center, estimated_depth)
+            x_map = x_camera + estimated_depth * np.cos(-theta_camera + theta_object)
+            y_map = y_camera + estimated_depth * np.sin(theta_camera + theta_object)
+
+            object_dict = {}
+            object_dict['class_name'] = class_name
+            object_dict['depth'] = estimated_depth
+            object_dict['x_min'] = x_min
+            object_dict['y_min'] = y_min
+            object_dict['x_max'] = x_max
+            object_dict['y_max'] = y_max
+            object_dict['x_map'] = x_map
+            object_dict['y_map'] = y_map
+            data_dict[i] = object_dict
+
+            # Write estimated depth on the image
+            image_with_boxes = cv2.putText(image_with_boxes, '{}: {:.2f} m'.format(class_name, estimated_depth), (x[0]+10, y[0]+50), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
+            image_with_boxes = cv2.putText(image_with_boxes, '{:.2f}, {:.2f}, {:.2f}, {:.2f}'.format(x_min, y_min, x_max, y_max), (x[0]+10, y[0]+70), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
+            image_with_boxes = cv2.putText(image_with_boxes, '{:.2f}, {:.2f}'.format(x_map, y_map), (x[0]+10, y[0]+90), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
 
     # Create the ROS Image and publish it
     image_msg = Image()
@@ -141,30 +190,16 @@ def unifiedCallback(rgb_data, depth_data):
     image_msg.header.stamp = rospy.Time.now()
     publisher.publish(image_msg)
 
+    end_time = time.time()
+    print('Elapsed time: {}'.format(end_time - start_time))
+
+    if num_detected > 0:
+        data_dict['robot_id'] = robot_id
+    #     self.producer.produce(self.topic, value=json.dumps(data_dict).encode('utf-8'))
+
 if __name__ == '__main__':
     # Initialize the ROS node
     rospy.init_node('image_detection', anonymous=True)
-
-    # self.K = np.array([[570.3405082258201,               0.0, 319.5],
-    #                        [0.0,               570.3405082258201, 239.5],
-    #                        [0.0,                             0.0,   1.0]])
-    # self.R = np.identity(3)
-    # self.P = np.array([[570.3405082258201,               0.0, 319.5, 0.0],
-    #                     [              0.0, 570.3405082258201, 239.5, 0.0],
-    #                     [              0.0,               0.0,   1.0, 0.0]])
-                        
-    # self.K_inv = np.linalg.inv(self.K)
-    # self.P_inv = np.linalg.inv(self.P[:, :3])
-    
-    # self.fx = 570.3405082258201
-    # self.fy = 570.3405082258201
-    # self.S = 0
-    # self.cx = 319.5
-    # self.cy = 239.5
-    
-    # self.Converter = np.array([[1/self.fx, -self.S/(self.fx * self.fy), (self.S*self.cy - self.cx*self.fy)/(self.fx*self.fy)],
-    #                             [0, 1/self.fy, -self.cy/self.fy],
-    #                             [0, 0, 1]])
 
     weights_file = rospy.get_param('~weights_file', 'yolov8n-seg.pt')
     model = YOLO(weights_file)
@@ -176,9 +211,40 @@ if __name__ == '__main__':
     depth_readings = []
     depth_timestamps = []
 
+    camera_info_msg = rospy.wait_for_message("/camera/depth/camera_info", CameraInfo)
+    camera_info = camera_info_msg.K
+    camera_info = np.array(camera_info).reshape(3, 3)
+    fx = camera_info[0, 0]
+    fy = camera_info[1, 1]
+    cx = camera_info[0, 2]
+    cy = camera_info[1, 2]
+
+    tf_listener = tf.TransformListener()
+
     # Subscribe to the image topic
     # rospy.Subscriber('/camera/depth/image_raw', Image, depth_callback, queue_size=1)
     # rospy.Subscriber('/camera/color/image_raw', Image, image_callback, queue_size=1)
+
+    robot_id = os.environ.get('ROBOT_ID')
+    # self.bootstrap_servers = rospy.get_param('~bootstrap_servers', '192.168.50.2:29094')
+    # self.topic = "detected_objects"
+
+    # rospy.loginfo("Connecting to Kafka server...")
+    # self.producer = Producer({'bootstrap.servers': self.bootstrap_servers})
+    
+    # # Create the kafka topic if it doesn't already exist
+    # admin_client = AdminClient({'bootstrap.servers': self.bootstrap_servers})
+    # topic_metadata = admin_client.list_topics()
+
+    # rospy.loginfo("Connected to Kafka server")
+    # if self.topic not in topic_metadata.topics:
+    #     rospy.loginfo(f"Creating topic {self.topic}")
+    #     new_topic = NewTopic(self.topic, num_partitions=1, replication_factor=1)
+    #     admin_client.create_topics([new_topic])
+    # else:
+    #     rospy.loginfo(f"Topic {self.topic} already exists")
+
+    # rospy.loginfo("Beginning message streaming...")
 
     rbg_sub = message_filters.Subscriber('/camera/color/image_raw', Image)
     depth_sub = message_filters.Subscriber('/camera/depth/image_raw', Image)
