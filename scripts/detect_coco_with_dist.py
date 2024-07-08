@@ -111,6 +111,7 @@ def unifiedCallback(rgb_data, depth_data):
         depth = np.frombuffer(depth_data.data, dtype=np.uint16).reshape(depth_data.height, depth_data.width)
     
     data_dict = {}
+    j = 0
     for i in range(num_detected):
         class_num = results[0].boxes.cls[i].item()
         class_name = model.names[class_num]
@@ -141,6 +142,15 @@ def unifiedCallback(rgb_data, depth_data):
             X = X[indx]/1000  # meters
             Y = Y[indx]/1000  # meters
 
+            mean_depth = np.mean(depth_values)
+            std_depth = np.std(depth_values)
+
+            # Remove outliers
+            indx = np.where(np.abs(depth_values - mean_depth) < 2*std_depth)
+            depth_values = depth_values[indx]
+            X = X[indx]
+            Y = Y[indx]
+
             estimated_depth = np.mean(depth_values)/1000  # meters
             print('Estimated depth of {} is {} meters'.format(class_name, estimated_depth))
 
@@ -160,9 +170,11 @@ def unifiedCallback(rgb_data, depth_data):
             x_center = (x_min + x_max) / 2
             y_center = (y_min + y_max) / 2
 
+            hypot = np.sqrt(x_center**2 + estimated_depth**2)
+
             theta_object = np.arctan2(x_center, estimated_depth)
-            x_map = x_camera + estimated_depth * np.cos(-theta_camera + theta_object)
-            y_map = y_camera + estimated_depth * np.sin(theta_camera + theta_object)
+            x_map = x_camera + hypot * np.cos(theta_camera - theta_object)
+            y_map = y_camera + hypot * np.sin(theta_camera - theta_object)
 
             object_dict = {}
             object_dict['class_name'] = class_name
@@ -173,7 +185,8 @@ def unifiedCallback(rgb_data, depth_data):
             object_dict['y_max'] = y_max
             object_dict['x_map'] = x_map
             object_dict['y_map'] = y_map
-            data_dict[i] = object_dict
+            data_dict[j] = object_dict
+            j += 1
 
             # Write estimated depth on the image
             image_with_boxes = cv2.putText(image_with_boxes, '{}: {:.2f} m'.format(class_name, estimated_depth), (x[0]+10, y[0]+50), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
@@ -195,7 +208,7 @@ def unifiedCallback(rgb_data, depth_data):
 
     if num_detected > 0:
         data_dict['robot_id'] = robot_id
-    #     self.producer.produce(self.topic, value=json.dumps(data_dict).encode('utf-8'))
+        producer.produce(topic, value=json.dumps(data_dict).encode('utf-8'))
 
 if __name__ == '__main__':
     # Initialize the ROS node
@@ -226,25 +239,25 @@ if __name__ == '__main__':
     # rospy.Subscriber('/camera/color/image_raw', Image, image_callback, queue_size=1)
 
     robot_id = os.environ.get('ROBOT_ID')
-    # self.bootstrap_servers = rospy.get_param('~bootstrap_servers', '192.168.50.2:29094')
-    # self.topic = "detected_objects"
+    bootstrap_servers = rospy.get_param('~bootstrap_servers', '192.168.50.2:29094')
+    topic = "detected_objects"
 
-    # rospy.loginfo("Connecting to Kafka server...")
-    # self.producer = Producer({'bootstrap.servers': self.bootstrap_servers})
+    rospy.loginfo("Connecting to Kafka server...")
+    producer = Producer({'bootstrap.servers': bootstrap_servers})
     
     # # Create the kafka topic if it doesn't already exist
-    # admin_client = AdminClient({'bootstrap.servers': self.bootstrap_servers})
-    # topic_metadata = admin_client.list_topics()
+    admin_client = AdminClient({'bootstrap.servers': bootstrap_servers})
+    topic_metadata = admin_client.list_topics()
 
-    # rospy.loginfo("Connected to Kafka server")
-    # if self.topic not in topic_metadata.topics:
-    #     rospy.loginfo(f"Creating topic {self.topic}")
-    #     new_topic = NewTopic(self.topic, num_partitions=1, replication_factor=1)
-    #     admin_client.create_topics([new_topic])
-    # else:
-    #     rospy.loginfo(f"Topic {self.topic} already exists")
+    rospy.loginfo("Connected to Kafka server")
+    if topic not in topic_metadata.topics:
+        rospy.loginfo(f"Creating topic {topic}")
+        new_topic = NewTopic(topic, num_partitions=1, replication_factor=1)
+        admin_client.create_topics([new_topic])
+    else:
+        rospy.loginfo(f"Topic {topic} already exists")
 
-    # rospy.loginfo("Beginning message streaming...")
+    rospy.loginfo("Beginning message streaming...")
 
     rbg_sub = message_filters.Subscriber('/camera/color/image_raw', Image)
     depth_sub = message_filters.Subscriber('/camera/depth/image_raw', Image)
