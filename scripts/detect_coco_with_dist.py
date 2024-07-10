@@ -18,6 +18,8 @@ import os
 from confluent_kafka import Producer
 from confluent_kafka.admin import AdminClient, NewTopic
 
+from sort import *
+
 def depth_callback(data):
     # Convert to numpy array
     depth = np.frombuffer(data.data, dtype=np.uint16).reshape(data.height, data.width)
@@ -116,11 +118,15 @@ def unifiedCallback(rgb_data, depth_data):
         # Convert depth image to numpy array
         depth = np.frombuffer(depth_data.data, dtype=np.uint16).reshape(depth_data.height, depth_data.width)
     
+    detected_object_dict = {}
+    for i in range(80):
+        detected_object_dict[i] = []
     data_dict = {}
     j = 0
     for i in range(num_detected):
         class_num = results[0].boxes.cls[i].item()
         class_name = model.names[class_num]
+        class_score = results[0].boxes.conf[i].item()
         
         x = results[0].masks.xy[i][:, 0].astype(int)
         y = results[0].masks.xy[i][:, 1].astype(int)
@@ -206,6 +212,8 @@ def unifiedCallback(rgb_data, depth_data):
                 data_dict[j] = object_dict
                 j += 1
 
+                detected_object_dict[class_num].append([x[0], y[0], np.max(x), np.max(y), class_score])
+
                 # Create DetectedObject message
                 detected_object = DetectedObject()
                 detected_object.class_name = class_name
@@ -223,6 +231,16 @@ def unifiedCallback(rgb_data, depth_data):
                 image_with_boxes = cv2.putText(image_with_boxes, '{}: {:.2f} m'.format(class_name, estimated_depth), (x[0]+10, y[0]+50), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
                 image_with_boxes = cv2.putText(image_with_boxes, '{:.2f}, {:.2f}, {:.2f}, {:.2f}'.format(x_min, y_min, x_max, y_max), (x[0]+10, y[0]+70), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
                 image_with_boxes = cv2.putText(image_with_boxes, '{:.2f}, {:.2f}'.format(x_map, y_map), (x[0]+10, y[0]+90), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
+
+    for i in range(80):
+        if not len(detected_object_dict[i]):
+            detected_object_array = np.empty((0,5))
+            tracker[i].update(detected_object_array)
+        else:
+            detected_object_array = np.array(detected_object_dict[i], ndmin=2)
+            tracking = tracker[i].update(detected_object_array)
+            print("Class " + str(i))
+            print(tracking)
 
     # Create the ROS Image and publish it
     image_msg = Image()
@@ -251,6 +269,10 @@ if __name__ == '__main__':
 
     weights_file = rospy.get_param('~weights_file', 'yolov8n-seg.pt')
     model = YOLO(weights_file)
+
+    tracker = {}
+    for i in range(80):
+        tracker[i] = Sort()
 
     # Create the publisher that will show image with bounding boxes
     publisher = rospy.Publisher('/camera/color/image_with_boxes', Image, queue_size=1)
