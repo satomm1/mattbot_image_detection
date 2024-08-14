@@ -15,83 +15,6 @@ import time
 import json
 import os
 
-from confluent_kafka import Producer
-from confluent_kafka.admin import AdminClient, NewTopic
-
-from sort import *
-
-def depth_callback(data):
-    # Convert to numpy array
-    depth = np.frombuffer(data.data, dtype=np.uint16).reshape(data.height, data.width)
-
-    # Append the depth reading and timestamp to the list
-    depth_readings.append(depth)
-    depth_timestamps.append(data.header.stamp)
-
-    # Remove the oldest reading if the list is too long
-    if (len(depth_readings) > 5):
-        depth_readings.pop(0)
-        depth_timestamps.pop(0)
-
-
-def image_callback(data):
-    # Get the image from the message
-    image = np.frombuffer(data.data, dtype=np.uint8).reshape(data.height, data.width, -1)
-
-    # Perform object detection
-    results = model.predict(image, device=0, conf=0.6, agnostic_nms=True)
-
-    image_time = data.header.stamp
-    
-    # Find depth timestamp that is closest to the image timestamp
-    closest_time = min(depth_timestamps, key=lambda x: abs(x - image_time))
-    index = depth_timestamps.index(closest_time)
-
-    # Get the depth reading that corresponds to the image and take the mask
-    depth = depth_readings[index]
-
-    # print(results[0].boxes)
-    # print(results[0].masks.xy[0])
-
-    # Draw the bounding boxes
-    image_with_boxes = results[0].plot()
-
-    num_detected = len(results[0].boxes.cls)
-
-    detection_array = DetectedObjectArray()
-    detection_array.header.stamp = rospy.Time.now()
-    detection_array.header.frame_id = 'map'
-
-    for i in range(num_detected):
-        class_num = results[0].boxes.cls[i].item()
-        class_name = model.names[class_num]
-        
-        x = results[0].masks.xy[i][:, 0].astype(int)
-        y = results[0].masks.xy[i][:, 1].astype(int)
-
-        depth_values = depth[y, x]
-
-        # Remove zero depth values
-        indx = np.where(depth_values > 0)
-        depth_values = depth_values[indx]
-
-        estimated_depth = np.mean(depth_values)/1000  # meters
-        print('Estimated depth of {} is {} meters'.format(class_name, estimated_depth))
-
-        # Write estimated depth on the image
-        image_with_boxes = cv2.putText(image_with_boxes, '{}: {:.2f} m'.format(class_name, estimated_depth), (x[0]+10, y[0]+50), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
-
-
-    # Create the ROS Image and publish it
-    image_msg = Image()
-    image_msg.data = image_with_boxes.tobytes()
-    image_msg.height = image_with_boxes.shape[0]
-    image_msg.width = image_with_boxes.shape[1]
-    image_msg.encoding = 'rgb8'
-    image_msg.step = 3 * image_with_boxes.shape[1]
-    image_msg.header.stamp = rospy.Time.now()
-
-    publisher.publish(image_msg)
 
 def unifiedCallback(rgb_data, depth_data):
 
@@ -140,22 +63,6 @@ def unifiedCallback(rgb_data, depth_data):
         y = results[0].masks.xy[i][:, 1].astype(int)
 
         detected_object_dict[class_num].append([x[0], y[0], np.max(x), np.max(y), class_score])
-    
-    # for i in range(80):
-    #     if not len(detected_object_dict[i]):
-    #         detected_object_array = np.empty((0,5))
-    #         tracker[i].update(detected_object_array)
-    #     else:
-    #         detected_object_array = np.array(detected_object_dict[i], ndmin=2)
-    #         tracking = tracker[i].update(detected_object_array)
-    #         if tracking.shape[0] != 0:
-    #             # tracking_dict[i].append(0)
-    #             tracking_dict[i].append(tracking[0,4])
-    #         else:
-    #             tracking_dict[i].append(0)
-    #         print("Class " + str(i))
-    #         print(tracking)
-
 
     data_dict = {}
     j = 0
@@ -163,9 +70,6 @@ def unifiedCallback(rgb_data, depth_data):
         class_num = results[0].boxes.cls[i].item()
         class_name = model.names[class_num]
         class_score = results[0].boxes.conf[i].item()
-
-        # track_num = tracking_dict[class_num][tracking_counts[class_num]]
-        # tracking_counts[class_num] += 1
         
         x = results[0].masks.xy[i][:, 0].astype(int)
         y = results[0].masks.xy[i][:, 1].astype(int)
@@ -254,7 +158,6 @@ def unifiedCallback(rgb_data, depth_data):
                 data_dict[j] = object_dict
                 j += 1
 
-
                 # Create DetectedObject message
                 detected_object = DetectedObject()
                 detected_object.class_name = class_name
@@ -291,10 +194,6 @@ def unifiedCallback(rgb_data, depth_data):
     end_time = time.time()
     print('Elapsed time: {}'.format(end_time - start_time))
 
-    if num_detected > 0:
-        data_dict['robot_id'] = robot_id
-        producer.produce(topic, value=json.dumps(data_dict).encode('utf-8'))
-
 def cmd_vel_callback(msg):
     if np.abs(msg.angular.z) > 0.125:
         is_turning = True
@@ -310,10 +209,6 @@ if __name__ == '__main__':
     weights_file = rospy.get_param('~weights_file', 'yolov8n-seg.pt')
     model = YOLO(weights_file)
 
-    tracker = {}
-    for i in range(80):
-        tracker[i] = Sort()
-
     # Create the publisher that will show image with bounding boxes
     publisher = rospy.Publisher('/camera/color/image_with_boxes', Image, queue_size=1)
     detected_object_publisher = rospy.Publisher('/detected_objects', DetectedObjectArray, queue_size=10)
@@ -321,7 +216,7 @@ if __name__ == '__main__':
     depth_readings = []
     depth_timestamps = []
 
-    camera_info_msg = rospy.wait_for_message("/camera/depth/camera_info", CameraInfo)
+    camera_info_msg = rospy.wait_for_message("/camera/color/camera_info", CameraInfo)
     camera_info = camera_info_msg.K
     camera_info = np.array(camera_info).reshape(3, 3)
     fx = camera_info[0, 0]
@@ -331,30 +226,9 @@ if __name__ == '__main__':
 
     tf_listener = tf.TransformListener()
 
-    # Subscribe to the image topic
-    # rospy.Subscriber('/camera/depth/image_raw', Image, depth_callback, queue_size=1)
-    # rospy.Subscriber('/camera/color/image_raw', Image, image_callback, queue_size=1)
-
     robot_id = os.environ.get('ROBOT_ID')
     bootstrap_servers = rospy.get_param('~bootstrap_servers', '192.168.50.2:29094')
     topic = "detected_objects"
-
-    rospy.loginfo("Connecting to Kafka server...")
-    producer = Producer({'bootstrap.servers': bootstrap_servers})
-    
-    # # Create the kafka topic if it doesn't already exist
-    admin_client = AdminClient({'bootstrap.servers': bootstrap_servers})
-    topic_metadata = admin_client.list_topics()
-
-    rospy.loginfo("Connected to Kafka server")
-    if topic not in topic_metadata.topics:
-        rospy.loginfo(f"Creating topic {topic}")
-        new_topic = NewTopic(topic, num_partitions=1, replication_factor=1)
-        admin_client.create_topics([new_topic])
-    else:
-        rospy.loginfo(f"Topic {topic} already exists")
-
-    rospy.loginfo("Beginning message streaming...")
 
     cmd_vel_subscriber = rospy.Subscriber('/cmd_vel', Twist, cmd_vel_callback, queue_size=1)
     rbg_sub = message_filters.Subscriber('/camera/color/image_raw', Image)
