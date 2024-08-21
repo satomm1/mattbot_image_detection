@@ -166,6 +166,7 @@ include_directories(
 catkin_install_python(PROGRAMS
   scripts/detect_coco.py
   scripts/detect_cone.py
+  scripts/detect_cone_with_dist.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 

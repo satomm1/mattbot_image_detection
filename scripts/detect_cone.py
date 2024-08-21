@@ -9,7 +9,7 @@ def callback(data):
     image = np.frombuffer(data.data, dtype=np.uint8).reshape(data.height, data.width, -1)
 
     # Perform object detection
-    results = model.predict(image, device=0, conf=0.5, agnostic_nms=True)
+    results = model.predict(image, device=0, conf=0.4, agnostic_nms=True)
 
     # Draw the bounding boxes
     image_with_boxes = results[0].plot()
@@ -31,7 +31,7 @@ if __name__ == '__main__':
     # Initialize the ROS node
     rospy.init_node('image_detection', anonymous=True)
 
-    weights_file = rospy.get_param('~weights_file')
+    weights_file = rospy.get_param('~weights_file', 'cone.pt')
     model = YOLO(weights_file)
 
     # Create the publisher that will show image with bounding boxes
