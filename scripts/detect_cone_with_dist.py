@@ -129,6 +129,9 @@ class ConeDetector:
                 estimated_depth = np.percentile(depth_values, 25)/1000  # meters
                 print('Estimated depth of {} is {} meters'.format(class_name, estimated_depth))
 
+                if estimated_depth > 5:
+                    continue
+
                 # Get map to camera_link transform
                 x_camera = trans[0]
                 y_camera = trans[1]
