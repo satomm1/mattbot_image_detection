@@ -152,12 +152,14 @@ class ConeDetector:
                 x_center = ((x_max+x_min)/2 - self.cx) * estimated_depth / self.fx
                 y_center = (y - self.cy) * estimated_depth / self.fy
 
+                object_width = (x_max- self.cx) * estimated_depth / self.fx - (x_min - self.cx) * estimated_depth / self.fx
+
                 hypot = np.sqrt(x_center**2 + estimated_depth**2)
                 
 
                 theta_object = np.arctan2(x_center, estimated_depth)
-                x_map = x_camera + (hypot ) * np.cos(theta_camera - theta_object)  # Add object width/2 to get center of object (assume width=depth)
-                y_map = y_camera + (hypot ) * np.sin(theta_camera - theta_object)
+                x_map = x_camera + (hypot + object_width/2) * np.cos(theta_camera - theta_object)  # Add object width/2 to get center of object (assume width=depth)
+                y_map = y_camera + (hypot + object_width/2) * np.sin(theta_camera - theta_object)
 
                 object_dict = {}
                 object_dict['class_name'] = class_name
@@ -190,7 +192,7 @@ class ConeDetector:
                 image_with_boxes = cv2.putText(image_with_boxes, '{}: {:.2f} m'.format(class_name, estimated_depth), (x[0]+10, y[0]+50), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
                 image_with_boxes = cv2.putText(image_with_boxes, '{:.2f}, {:.2f}, {:.2f}, {:.2f}'.format(x_min, y_min, x_max, y_max), (x[0]+10, y[0]+70), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
                 image_with_boxes = cv2.putText(image_with_boxes, '{:.2f}, {:.2f}'.format(x_map, y_map), (x[0]+10, y[0]+90), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
-                image_with_boxes = cv2.putText(image_with_boxes, 'Theta: {:.2f}'.format(theta_object), (x[0]+10, y[0]+110), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
+                image_with_boxes = cv2.putText(image_with_boxes, 'Width: {:.2f}'.format(object_width), (x[0]+10, y[0]+110), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
 
         # Create the ROS Image and publish it
         image_msg = Image()
