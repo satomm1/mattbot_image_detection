@@ -1,6 +1,5 @@
 import rospy
 from sensor_msgs.msg import Image, CameraInfo
-from vision_msgs.msg import Detection3D, Detection3DArray, BoundingBox3D, ObjectHypothesisWithPose
 from geometry_msgs.msg import PoseWithCovariance, Pose, Twist
 from mattbot_image_detection.msg import DetectedObject, DetectedObjectArray
 import message_filters
