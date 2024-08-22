@@ -59,7 +59,7 @@ class ConeDetector:
         image = np.frombuffer(rgb_data.data, dtype=np.uint8).reshape(rgb_data.height, rgb_data.width, -1)
 
         # Perform object detection
-        results = self.model.predict(image, device=0, conf=0.7, agnostic_nms=True)
+        results = self.model.predict(image, device=0, conf=0.75, agnostic_nms=True)
 
         image_time = rgb_data.header.stamp
         
@@ -128,7 +128,6 @@ class ConeDetector:
                 # Take the 25th percentile depth
                 estimated_depth = np.percentile(depth_values, 25)/1000  # meters
                 print('Estimated depth of {} is {} meters'.format(class_name, estimated_depth))
-
 
                 # Get map to camera_link transform
                 x_camera = trans[0]
