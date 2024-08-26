@@ -52,7 +52,12 @@ class ConeDetector:
             return
 
         start_time = time.time()
-        (trans, rot) = self.tf_listener.lookupTransform("/map", "/camera_link", rospy.Time(0))
+
+        # Get the transform from map to camera_link
+        try:
+            (trans, rot) = self.tf_listener.lookupTransform("/map", "/camera_link", rospy.Time(0))
+        except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
+            return
 
         # Get the image from the message
         image = np.frombuffer(rgb_data.data, dtype=np.uint8).reshape(rgb_data.height, rgb_data.width, -1)
