@@ -2,3 +2,7 @@ string class_name
 float32 probability
 geometry_msgs/Pose pose
 float32 width
+float32 x1
+float32 y1
+float32 x2
+float32 y2
