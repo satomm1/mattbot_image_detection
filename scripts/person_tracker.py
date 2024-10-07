@@ -41,10 +41,12 @@ class PersonTracker:
 
         detections = []
         poses = []
+        widths = []
         for obj in object_array:
             if obj.class_name == "person":
                 detections.append([obj.x1, obj.y1, obj.x2, obj.y2, obj.probability])
                 poses.append([obj.pose.position.x, obj.pose.position.y])
+                widths.append(obj.width)
 
         detections = np.array(detections)
         track_bbs_ids = self.tracker.update(detections)
@@ -145,6 +147,7 @@ class PersonTracker:
             person_message.future_pose2.position.x = self.future_pose2[person_id][0]
             person_message.future_pose2.position.y = self.future_pose2[person_id][1]
             person_message.future_pose2.position.z = 0
+            person_message.width = widths[ii]
             person_message.exited = False
 
             person_array.persons.append(person_message)
@@ -161,8 +164,8 @@ class PersonTracker:
             for track_id in self.active_tracks.keys():
                 self.active_tracks[track_id] += 1
 
-                # If the track has not been detected in the last 10 seconds, remove it
-                if self.active_tracks[track_id] > 10:
+                # If the track has not been detected in the last 5 seconds, remove it
+                if self.active_tracks[track_id] > 5:
                     self.marker_array.markers[track_id-1].action = Marker.DELETE
                     self.person_marker_publisher.publish(self.marker_array)
                     keys_to_remove.append(track_id)
