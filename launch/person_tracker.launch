@@ -2,7 +2,7 @@
 <launch>
 
   <!-- Launch the person tracker script -->
-  <node name="person_tracker" pkg="mattbot_image_detection" type="person_tracker.py" output="screen">
+  <node name="person_tracker" pkg="mattbot_image_detection" type="person_tracker.py" output="log">
   </node>
 
 </launch>
