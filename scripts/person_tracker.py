@@ -99,7 +99,7 @@ class PersonTracker:
                 self.poses[person_id] = pose
                 self.future_pose1[person_id] = pose
                 self.future_pose2[person_id] = pose
-                self.is_static[person_id] = True
+                self.is_static[person_id] = False
 
                 self.num_detected += 1
             elif person_id not in self.active_tracks.keys():
@@ -113,12 +113,12 @@ class PersonTracker:
                 self.poses[person_id] = pose
                 self.future_pose1[person_id] = pose
                 self.future_pose2[person_id] = pose
-                self.is_static[person_id] = True
+                self.is_static[person_id] = False
             else:
                 self.marker_array.markers[int(person_id-1)] = marker
                 self.active_tracks[person_id] = 0                
 
-                if np.linalg.norm(np.array(pose) - np.array(self.poses[person_id])) < 0.1:
+                if np.linalg.norm(np.array(pose) - np.array(self.poses[person_id])) < 0.05:
                     self.is_static[person_id] = True
                     self.future_pose1[person_id] = pose
                     self.future_pose2[person_id] = pose
