@@ -1,0 +1,11 @@
+<!-- cone_person_dist_tall.launch -->
+<launch>
+
+  <arg name="weights_file" default="$(find mattbot_image_detection)/weights/cone_person.pt"/>
+
+  <!-- Launch the cone detector script -->
+  <node name="image_detector_node" pkg="mattbot_image_detection" type="detect_cone_person_with_dist_tall.py" output="log">
+    <param name="weights_file" value="$(arg weights_file)" />
+  </node>
+
+</launch>

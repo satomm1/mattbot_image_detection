@@ -171,6 +171,7 @@ catkin_install_python(PROGRAMS
   scripts/detect_cone_with_dist.py
   scripts/detect_coco_with_dist_DDS.py
   scripts/detect_cone_person_with_dist.py
+  scripts/detect_cone_person_with_dist_tall.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
