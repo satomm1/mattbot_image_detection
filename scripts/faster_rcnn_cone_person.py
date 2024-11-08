@@ -3,7 +3,6 @@ import torch.nn as nn
 import torchvision
 from torchvision.ops import nms
 from torchvision.models.detection import FasterRCNN
-# from torchvision.models.detection import fasterrcnn_mobilenet_v3_large_fpn
 from torchvision.transforms import functional as F
 import cv2
 import rospy
