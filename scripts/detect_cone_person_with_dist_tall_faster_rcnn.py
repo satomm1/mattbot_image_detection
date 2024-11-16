@@ -29,7 +29,7 @@ LABEL_NAMES = ['background', 'person', 'cone', 'other']
 class class ObjectDetector:
     
     def __init__(self):
-        weights_file = rospy.get_param('~weights_file', '../weights/openset_mobilenet_small_not_frozen.pth')
+        weights_file = rospy.get_param('~weights_file', '../weights/openset_mobilenet_V1.pth')
         
         self.device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
         print(f"Using device {self.device}")

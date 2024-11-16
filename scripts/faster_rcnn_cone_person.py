@@ -30,7 +30,7 @@ model.roi_heads.box_predictor.cls_score = nn.Linear(in_features=in_features, out
 model.roi_heads.box_predictor.bbox_pred = nn.Linear(in_features=in_features, out_features=num_classes*4, bias=True)
 
 # Load custom weights
-model.load_state_dict(torch.load('../weights/openset_mobilenet_small_not_frozen.pth'))
+model.load_state_dict(torch.load('../weights/openset_mobilenet_V1.pth'))
 
 # Set to evaluation mode and send to device
 model.eval()
@@ -101,7 +101,7 @@ def image_callback(msg):
     pub.publish(annotated_image_msg)
 
     t2 = time.time()
-    print(f"Time taken: {t2-t1:.4f}s")
+    # print(f"Time taken: {t2-t1:.4f}s")
 
     # Get time of original image message:
     time_original = msg.header.stamp
@@ -110,7 +110,7 @@ def image_callback(msg):
     time_diff = time_now - time_original
     # Convert to seconds
     time_diff = time_diff.to_sec()
-    print(f"Time difference: {time_diff:.4f}s")
+    # print(f"Time difference: {time_diff:.4f}s")
 
 # Subscribe to the image topic
 rospy.Subscriber('/camera/color/image_raw', Image, image_callback, queue_size=1)
