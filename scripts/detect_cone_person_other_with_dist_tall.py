@@ -16,8 +16,8 @@ import json
 import os
 
 IOU_THRESHOLD = 0.1  # Set the IoU threshold for NMS
-OBJECT_CONFIDENCE_THRESHOLD = 0.75
-OTHER_CONFIDENCE_THRESHOLD = 0.04
+OBJECT_CONFIDENCE_THRESHOLD = 0.7
+OTHER_CONFIDENCE_THRESHOLD = 0.03
 
 class ConeDetector:
     
@@ -153,6 +153,12 @@ class ConeDetector:
         print('Elapsed time: {}'.format(end_time - start_time))
 
     def depth_calculation(self, results, num_detected, depth, trans, rot, detected_cone_list, data_dict, data_count, detection_array, image_with_boxes, coco=False):
+        # Get map to camera_link transform
+        x_camera = trans[0]
+        y_camera = trans[1]
+        _, _, theta_camera = euler_from_quaternion(rot)
+        theta_camera = theta_camera
+        
         for i in range(num_detected):
             class_num = int(results[0].boxes.cls[i].item())
 
@@ -178,122 +184,84 @@ class ConeDetector:
             x2 = int(x_max)
             y2 = int(y_max)
 
-            x_range = np.arange(x_min, x_max).astype(int)
-            y_range = np.arange(y_min, y_max).astype(int)
+            x_center = (x1 + x2) / 2
+            y_center = (y1 + y2) / 2
 
-            x, y = np.meshgrid(x_range, y_range)
+            # Get the estimated depth of the object (in meters)
+            estimated_depth = self.get_depth(x1, y1, x2, y2, depth)
 
-            # estimated_depth = self.get_depth(x1, y1, x2, y2, depth)
+            if estimated_depth == 0 or estimated_depth > 5:
+                continue
 
-            x = x.flatten()
-            y = y.flatten()
+            # Get the object's position in the camera frame
+            local_x_min = (x1 - self.cx) * estimated_depth / self.fx  # meters
+            local_z_min = (y1 - self.cy) * estimated_depth / self.fy  # meters
+            local_x_max = (x2 - self.cx) * estimated_depth / self.fx  # meters
+            local_z_max = (y2 - self.cy) * estimated_depth / self.fy  # meters
+            local_x_center = (x_center - self.cx) * estimated_depth / self.fx  # meters
+            local_z_center = (y_center - self.cy) * estimated_depth / self.fy  # meters
 
-            X = (x - self.cx) * depth[y, x] / self.fx
-            Y = (y - self.cy) * depth[y, x] / self.fy
+            # Calculate the object's width and height
+            object_width = local_x_max - local_x_min
+            object_height = local_z_max - local_z_min
 
-            # rospy.loginfo('Class: {}, Score: {:.2f}, x_min: {:.2f}, y_min: {:.2f}, x_max: {:.2f}, y_max: {:.2f}'.format(class_name, class_score, x_min, y_min, x_max, y_max))
-            # print('Class: {}, Score: {:.2f}, x_min: {:.2f}, y_min: {:.2f}, x_max: {:.2f}, y_max: {:.2f}'.format(class_name, class_score, x_min, y_min, x_max, y_max))
+            if object_height < 0.1 or object_width < 0.1:
+                continue  # Skip objects that are too small
+
+            hypot = np.sqrt(local_x_center**2 + estimated_depth**2)
+
+            # Calculate the object's position in the map frame
+            theta_object = np.arctan2(local_x_center, estimated_depth)
+            x_map = x_camera + (hypot + object_width/2) * np.cos(theta_camera - theta_object)  # Add object width/2 to get center of object (assume width=depth)
+            y_map = y_camera + (hypot + object_width/2) * np.sin(theta_camera - theta_object)
+
+            object_dict = {}
+            object_dict['class_name'] = class_name
+            object_dict['depth'] = estimated_depth
+            object_dict['x_min'] = x_min
+            object_dict['y_min'] = y_min
+            object_dict['x_max'] = x_max
+            object_dict['y_max'] = y_max
+            object_dict['x_map'] = x_map
+            object_dict['y_map'] = y_map
+            data_dict[data_count] = object_dict
+            data_count += 1
+
+            if class_name == 'cone':
+                detected_cone_list.append([x1, y1, x2, y2, class_score])
+
+            # Create DetectedObject message
+            detected_object = DetectedObject()
+            detected_object.class_name = class_name
+            detected_object.probability = class_score
+            detected_object_pose = Pose()
+            detected_object_pose.position.x = x_map
+            detected_object_pose.position.y = y_map
+            detected_object_pose.position.z = 0
+            detected_object_pose.orientation.w = 1
+            detected_object.pose = detected_object_pose
+            detected_object.width = object_width
+            detected_object.x1 = x1
+            detected_object.y1 = y1
+            detected_object.x2 = x2
+            detected_object.y2 = y2
+            detection_array.objects.append(detected_object)
+
+            # Write estimated depth on the image
+            image_with_boxes = cv2.putText(image_with_boxes, 'Depth: {:.2f} m'.format(estimated_depth), (x1, y1+15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
+            # image_with_boxes = cv2.putText(image_with_boxes, '{:.2f}, {:.2f}, {:.2f}, {:.2f}'.format(x_min, y_min, x_max, y_max), (x[0]+10, y[0]+70), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
+            # image_with_boxes = cv2.putText(image_with_boxes, '{:.2f}, {:.2f}'.format(x_map, y_map), (x1+10, y1+90), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
+            # image_with_boxes = cv2.putText(image_with_boxes, 'Width: {:.2f} m'.format(object_width), (x1+10, y1+110), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
+
+
+            if coco:  # Draw bounding box and label for COCO classes
+                if class_name == "unknown":
+                    image_with_boxes = cv2.rectangle(image_with_boxes, (x1, y1), (x2, y2), (255, 0, 0), 2)
+                    image_with_boxes = cv2.putText(image_with_boxes, '{}: {:.2f}'.format(class_name, class_score), (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1, cv2.LINE_AA)
+                else:
+                    image_with_boxes = cv2.rectangle(image_with_boxes, (x1, y1), (x2, y2), (0, 0, 255), 2)
+                    image_with_boxes = cv2.putText(image_with_boxes, '{}: {:.2f}'.format(class_name, class_score), (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1, cv2.LINE_AA)
             
-            depth_values = depth[y, x]
-
-            # Remove zero depth values
-            indx = np.where(depth_values > 0)
-
-            if len(indx[0]) == 0:
-                object_dict = {}
-                object_dict['class_name'] = class_name
-                object_dict['depth'] = 0.0
-                object_dict['x_min'] = 0.0
-                object_dict['y_min'] = 0.0
-                object_dict['x_max'] = 0.0
-                object_dict['y_max'] = 0.0
-                object_dict['x_map'] = 0.0
-                object_dict['y_map'] = 0.0
-            else:
-                depth_values = depth_values[indx]
-                X = X[indx]/1000  # meters
-                Y = Y[indx]/1000  # meters
-
-                # Take the 25th percentile depth
-                estimated_depth = np.percentile(depth_values, 25)/1000  # meters
-                # print('Estimated depth of {} is {} meters'.format(class_name, estimated_depth))
-
-                if estimated_depth > 5:
-                    continue
-
-                # Get map to camera_link transform
-                x_camera = trans[0]
-                y_camera = trans[1]
-                _, _, theta_camera = euler_from_quaternion(rot)
-                theta_camera = theta_camera
-                # print("Theta camera: ", theta_camera)
-
-                x_min = np.min(X)
-                y_min = np.min(Y)
-                x_max = np.max(X)
-                y_max = np.max(Y)
-                object_width = x_max - x_min
-
-                x_center = (x_min + x_max) / 2
-                y_center = (y_min + y_max) / 2
-
-                x_min = results[0].boxes.xyxy[i][0].item()
-                x_max = results[0].boxes.xyxy[i][2].item()
-
-                x_center = ((x_max+x_min)/2 - self.cx) * estimated_depth / self.fx
-                y_center = (y - self.cy) * estimated_depth / self.fy
-
-                object_width = (x_max- self.cx) * estimated_depth / self.fx - (x_min - self.cx) * estimated_depth / self.fx
-
-                hypot = np.sqrt(x_center**2 + estimated_depth**2)
-                
-
-                theta_object = np.arctan2(x_center, estimated_depth)
-                x_map = x_camera + (hypot + object_width/2) * np.cos(theta_camera - theta_object)  # Add object width/2 to get center of object (assume width=depth)
-                y_map = y_camera + (hypot + object_width/2) * np.sin(theta_camera - theta_object)
-
-                object_dict = {}
-                object_dict['class_name'] = class_name
-                object_dict['depth'] = estimated_depth
-                object_dict['x_min'] = x_min
-                object_dict['y_min'] = y_min
-                object_dict['x_max'] = x_max
-                object_dict['y_max'] = y_max
-                object_dict['x_map'] = x_map
-                object_dict['y_map'] = y_map
-                data_dict[data_count] = object_dict
-                data_count += 1
-
-                if class_name == 'cone':
-                    detected_cone_list.append([x[0], y[0], np.max(x), np.max(y), class_score])
-
-                # Create DetectedObject message
-                detected_object = DetectedObject()
-                detected_object.class_name = class_name
-                detected_object.probability = class_score
-                detected_object_pose = Pose()
-                detected_object_pose.position.x = x_map
-                detected_object_pose.position.y = y_map
-                detected_object_pose.position.z = 0
-                detected_object_pose.orientation.w = 1
-                detected_object.pose = detected_object_pose
-                detected_object.width = object_width
-                detected_object.x1 = x1
-                detected_object.y1 = y1
-                detected_object.x2 = x2
-                detected_object.y2 = y2
-                detection_array.objects.append(detected_object)
-
-                # Write estimated depth on the image
-                image_with_boxes = cv2.putText(image_with_boxes, '{}: {:.2f} m'.format(class_name, estimated_depth), (x[0]+10, y[0]+50), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
-                image_with_boxes = cv2.putText(image_with_boxes, '{:.2f}, {:.2f}, {:.2f}, {:.2f}'.format(x_min, y_min, x_max, y_max), (x[0]+10, y[0]+70), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
-                image_with_boxes = cv2.putText(image_with_boxes, '{:.2f}, {:.2f}'.format(x_map, y_map), (x[0]+10, y[0]+90), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
-                image_with_boxes = cv2.putText(image_with_boxes, 'Width: {:.2f}'.format(object_width), (x[0]+10, y[0]+110), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
-
-                # TODO draw bounding box if coco
-                if coco:
-                    image_with_boxes = cv2.rectangle(image_with_boxes, (x1, y1), (x2, y2), (0, 255, 0), 2)
-
         return detected_cone_list, data_dict, data_count, detection_array, image_with_boxes
 
     def get_depth(self, x_min, y_min, x_max, y_max, depth):
