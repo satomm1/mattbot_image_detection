@@ -54,6 +54,8 @@ add_message_files(
   FILES
   DetectedObject.msg
   DetectedObjectArray.msg
+  DetectedObjectWithImage.msg
+  DetectedObjectWithImageArray.msg
   Person.msg
   PersonArray.msg
 )
@@ -172,6 +174,7 @@ catkin_install_python(PROGRAMS
   scripts/detect_coco_with_dist_DDS.py
   scripts/detect_cone_person_with_dist.py
   scripts/detect_cone_person_with_dist_tall.py
+  scripts/detect_cone_person_other_with_dist_tall.py
   scripts/person_tracker.py
   scripts/sort.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}

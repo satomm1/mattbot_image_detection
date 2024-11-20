@@ -1,11 +1,12 @@
 import rospy
 from sensor_msgs.msg import Image, CameraInfo, PointCloud2
 from geometry_msgs.msg import PoseWithCovariance, Pose, Twist
-from mattbot_image_detection.msg import DetectedObject, DetectedObjectArray
+from mattbot_image_detection.msg import DetectedObject, DetectedObjectArray, DetectedObjectWithImage, DetectedObjectWithImageArray
 import message_filters
+from nav_msgs.msg import OccupancyGrid
+
 import tf
 from tf.transformations import euler_from_quaternion
-import sensor_msgs.point_cloud2 as pc2
 
 from ultralytics import YOLO
 import numpy as np
@@ -18,6 +19,62 @@ import os
 IOU_THRESHOLD = 0.1  # Set the IoU threshold for NMS
 OBJECT_CONFIDENCE_THRESHOLD = 0.7
 OTHER_CONFIDENCE_THRESHOLD = 0.03
+
+class StochOccupancyGrid2D(object):
+    def __init__(self, resolution, width, height, origin_x, origin_y,
+                window_size, probs, thresh=0.5, robot_d=0.6):
+        self.resolution = resolution
+        self.width = width
+        self.height = height
+        self.origin_x = origin_x
+        self.origin_y = origin_y
+        self.probs = np.reshape(np.asarray(probs), (height, width))
+        self.l = np.zeros((height, width))
+        self.window_size = window_size # window_size
+        # print(window_size)
+        self.thresh = thresh
+        self.robot_d=robot_d
+
+    def snap_to_grid(self, x):
+        return (self.resolution*round(x[0]/self.resolution), self.resolution*round(x[1]/self.resolution))
+
+    def snap_to_grid1(self, x):
+        return (self.resolution * np.round(x[0] / self.resolution), self.resolution * np.round(x[1] / self.resolution))
+
+    def get_index(self, x):
+        return (np.round((x[0]-self.origin_x)/self.resolution), np.round((x[1]-self.origin_y)/self.resolution))
+
+    def is_overlapped(self, x, y, width, height):
+        # Given global x/y coordinates, and width/height of the object in meters, return if the object is overlapped with the map
+        x1, y1 = self.get_index((x, y))
+
+        # Take minimum of width/height as the object's radius
+        r = min(width, height) / 2
+
+        # Check if the object is within the map
+        if x1 < 0 or y1 < 0 or x1 >= self.width or y1 >= self.height:
+            return True
+        
+        # Calculate the grid indices of the object's bounding box
+        x_min = int(max(0, x1 - r / self.resolution))
+        x_max = int(min(self.width - 1, x1 + r / self.resolution))
+        y_min = int(max(0, y1 - r / self.resolution))
+        y_max = int(min(self.height - 1, y1 + r / self.resolution))
+
+        # Count the number of occupied cells within the bounding box
+        occupied_cells = 0
+        total_cells = (x_max - x_min + 1) * (y_max - y_min + 1)
+        x_all, y_all = np.meshgrid(np.arange(x_min, x_max + 1), np.arange(y_min, y_max + 1))
+        occupied = np.where(self.probs[y_all, x_all] > self.thresh)
+        occupied_cells = len(occupied[0])
+
+        # Calculate the percentage of occupied cells
+        occupied_percentage = (occupied_cells / total_cells) * 100
+
+        print('Occupied percentage: {}'.format(occupied_percentage))
+        return occupied_percentage > 20  # Return True if more than 50% of the cells are occupied
+
+
 
 class ConeDetector:
     
@@ -35,6 +92,7 @@ class ConeDetector:
         # Create the publisher that will show image with bounding boxes
         self.publisher = rospy.Publisher('/camera/color/image_with_boxes', Image, queue_size=1)
         self.detected_object_publisher = rospy.Publisher('/detected_objects', DetectedObjectArray, queue_size=10)
+        self.unknown_object_publisher = rospy.Publisher('/unknown_objects', DetectedObjectWithImageArray, queue_size=10)
 
         camera_info_msg = rospy.wait_for_message("/camera/color/camera_info", CameraInfo)
         camera_info = camera_info_msg.K
@@ -43,6 +101,15 @@ class ConeDetector:
         self.fy = camera_info[1, 1]
         self.cx = camera_info[0, 2]
         self.cy = camera_info[1, 2]
+
+        self.map_msg = rospy.wait_for_message("/navigation_map", OccupancyGrid)
+        self.map = StochOccupancyGrid2D(self.map_msg.info.resolution, 
+                                             self.map_msg.info.width, 
+                                            self.map_msg.info.height,
+                                 self.map_msg.info.origin.position.x,
+                                 self.map_msg.info.origin.position.y,
+                                                                   5,
+                                                   self.map_msg.data)
 
         self.tf_listener = tf.TransformListener()
 
@@ -91,6 +158,11 @@ class ConeDetector:
         detection_array.header.frame_id = 'map'
         detection_array.objects = []
 
+        unknown_object_array = DetectedObjectWithImageArray()
+        unknown_object_array.header.stamp = rospy.Time.now()
+        unknown_object_array.header.frame_id = 'map'
+        unknown_object_array.objects = []
+
         detected_cone_list = []
 
         data_dict = {}
@@ -107,9 +179,10 @@ class ConeDetector:
             data_dict, 
             data_count, 
             detection_array, 
+            unknown_object_array,
             image_with_boxes) = self.depth_calculation(object_results, num_detected, depth, trans, rot, 
                                             detected_cone_list, data_dict, data_count, detection_array, 
-                                            image_with_boxes)
+                                            unknown_object_array, image_with_boxes, image)
         if num_detected_other > 0 and num_detected == 0:
             # Convert depth image to numpy array
 
@@ -122,17 +195,19 @@ class ConeDetector:
             data_dict, 
             data_count, 
             detection_array, 
+            unknown_object_array,
             image_with_boxes) = self.depth_calculation(other_results, num_detected_other, depth, trans, rot, 
                                                 detected_cone_list, data_dict, data_count, detection_array, 
-                                                image_with_boxes, coco=True)
+                                                unknown_object_array, image_with_boxes, image, coco=True)
         elif num_detected_other > 0:
             (detected_cone_list, 
             data_dict, 
             data_count, 
             detection_array, 
+            unknown_object_array,
             image_with_boxes) = self.depth_calculation(other_results, num_detected_other, depth, trans, rot, 
                                                 detected_cone_list, data_dict, data_count, detection_array, 
-                                                image_with_boxes, coco=True)
+                                                unknown_object_array, image_with_boxes, image, coco=True)
 
         # Create the ROS Image and publish it
         image_msg = Image()
@@ -148,11 +223,16 @@ class ConeDetector:
         if len(detection_array.objects) > 0:
             self.detected_object_publisher.publish(detection_array)      
 
+        # Publish the unknown objects array if any objects exist
+        if len(unknown_object_array.objects) > 0:   
+            self.unknown_object_publisher.publish(unknown_object_array)
+
         end_time = time.time()
         print('Detection time: {}'.format(detect_time - start_time))
         print('Elapsed time: {}'.format(end_time - start_time))
 
-    def depth_calculation(self, results, num_detected, depth, trans, rot, detected_cone_list, data_dict, data_count, detection_array, image_with_boxes, coco=False):
+    def depth_calculation(self, results, num_detected, depth, trans, rot, detected_cone_list, data_dict, data_count, detection_array, 
+                           unknown_object_array, image_with_boxes, image, coco=False):
         # Get map to camera_link transform
         x_camera = trans[0]
         y_camera = trans[1]
@@ -204,16 +284,23 @@ class ConeDetector:
             # Calculate the object's width and height
             object_width = local_x_max - local_x_min
             object_height = local_z_max - local_z_min
+            
 
             if object_height < 0.1 or object_width < 0.1:
                 continue  # Skip objects that are too small
-
-            hypot = np.sqrt(local_x_center**2 + estimated_depth**2)
+            object_depth = np.min([object_width, object_height])
+            
+            hypot = np.sqrt(local_x_center**2 + (estimated_depth + object_depth/2)**2)
 
             # Calculate the object's position in the map frame
             theta_object = np.arctan2(local_x_center, estimated_depth)
             x_map = x_camera + (hypot + object_width/2) * np.cos(theta_camera - theta_object)  # Add object width/2 to get center of object (assume width=depth)
             y_map = y_camera + (hypot + object_width/2) * np.sin(theta_camera - theta_object)
+
+            is_overlapped = False
+            if self.map.is_overlapped(x_map, y_map, object_width, object_height):
+                image_with_boxes = cv2.putText(image_with_boxes, 'Overlapped', (x1, y1+30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
+                is_overlapped = True
 
             object_dict = {}
             object_dict['class_name'] = class_name
@@ -247,6 +334,23 @@ class ConeDetector:
             detected_object.y2 = y2
             detection_array.objects.append(detected_object)
 
+            if not is_overlapped:
+                # Get the part of the image within the bounding box
+                object_image = image[y1:y2, x1:x2]
+                unknown_object = DetectedObjectWithImage()
+                unknown_object.class_name = class_name
+                unknown_object.probability = class_score
+                unknown_object.pose = detected_object_pose
+                unknown_object.width = object_width
+                unknown_object.x1 = x1
+                unknown_object.y1 = y1
+                unknown_object.x2 = x2
+                unknown_object.y2 = y2
+                unknown_object.data = object_image.tobytes()
+                unknown_object.image_height = object_image.shape[0]
+                unknown_object.image_width = object_image.shape[1]
+                unknown_object_array.objects.append(unknown_object)
+
             # Write estimated depth on the image
             image_with_boxes = cv2.putText(image_with_boxes, 'Depth: {:.2f} m'.format(estimated_depth), (x1, y1+15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
             # image_with_boxes = cv2.putText(image_with_boxes, '{:.2f}, {:.2f}, {:.2f}, {:.2f}'.format(x_min, y_min, x_max, y_max), (x[0]+10, y[0]+70), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
@@ -262,7 +366,7 @@ class ConeDetector:
                     image_with_boxes = cv2.rectangle(image_with_boxes, (x1, y1), (x2, y2), (0, 0, 255), 2)
                     image_with_boxes = cv2.putText(image_with_boxes, '{}: {:.2f}'.format(class_name, class_score), (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1, cv2.LINE_AA)
             
-        return detected_cone_list, data_dict, data_count, detection_array, image_with_boxes
+        return detected_cone_list, data_dict, data_count, detection_array, unknown_object_array, image_with_boxes
 
     def get_depth(self, x_min, y_min, x_max, y_max, depth):
         depth_values = depth[int(y_min):int(y_max), int(x_min):int(x_max)].flatten()
