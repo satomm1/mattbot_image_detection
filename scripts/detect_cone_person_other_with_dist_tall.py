@@ -71,7 +71,6 @@ class StochOccupancyGrid2D(object):
         # Calculate the percentage of occupied cells
         occupied_percentage = (occupied_cells / total_cells) * 100
 
-        print('Occupied percentage: {}'.format(occupied_percentage))
         return occupied_percentage > 20  # Return True if more than 50% of the cells are occupied
 
 
