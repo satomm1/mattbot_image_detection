@@ -1,12 +1,14 @@
 import rospy
 from nav_msgs.msg import OccupancyGrid, Path
 from geometry_msgs.msg import Twist
-from mattbot_image_detection.msg import DetectedObject, DetectedObjectArray
+from mattbot_image_detection.msg import DetectedObjectWithImage, DetectedObjectWithImageArray
 
 import requests
 import shutil
+import cv2
+import numpy as np
 
-QUERY = 'Provide a list of the objects in this picture?'
+QUERY = 'Provide the basic name of the most prominent object in this image. Provide as consise of a name as possible. For example, "dog" instead of "black dog".'
 
 class UnknownLabeling:
     
@@ -36,6 +38,7 @@ class UnknownLabeling:
     def path_callback(self, msg):
         self.path = msg
 
+    # TODO Keep track of labeled objects and only ask for the ones that are not labeled
     def object_callback(self, msg):
         if self.is_moving:
             # Only ask gemini if the object is in our path
@@ -45,18 +48,37 @@ class UnknownLabeling:
                         # Ask gemini to label the object
                         rospy.loginfo("Asking gemini to label object")
                         # Save as a jpg
-                        image_name = 'unknown_object.jpg
+                        image_name = 'unknown_object.jpg'
                         with open(image_name, 'wb') as f:
-                            f.write(obj.image.data)
+                            f.write(obj.data)
                         # Copy image to /gemini_code/
                         shutil.copyfile(image_name, f'../../../../../gemini_code/{image_name}')
-                        data = {'query': query, 'image_name': image_name}
-                        response = requests.post(url, json=data)
+                        data = {'query': QUERY, 'query_type': 'image', 'image_name': image_name}
+                        response = requests.post(self.url, json=data)
                         result = response.json()
                         print(result['response'])
         else:
             # Perform a check for all objects
-            pass
+             for obj in msg.objects:
+
+                # Ask gemini to label the object
+                rospy.loginfo("Asking gemini to label object")
+                # Save as a jpg
+                image_name = 'unknown_object.jpg'
+                np_arr = np.frombuffer(obj.data, np.uint8)
+                img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+                # Now save to the file
+                cv2.imwrite(image_name, img)
+
+                # Copy image to /gemini_code/
+                shutil.copyfile(image_name, f'../../../../../gemini_code/{image_name}')
+                data = {'query': QUERY, 'query_type': 'image', 'image_name': image_name}
+                response = requests.post(self.url, json=data)
+                result = response.json()
+                print(result['response'])
+
+                # Shutdown the node
+                rospy.signal_shutdown("All objects labeled")
 
     def run(self):
         rospy.spin()
@@ -64,6 +86,6 @@ class UnknownLabeling:
 
 if __name__ == "__main__":
     rospy.init_node("unknown_labeling")
-    UnknownLabeling()
-    UnknownLabeling.run()
+    labeler = UnknownLabeling()
+    labeler.run()
     

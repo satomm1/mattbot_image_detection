@@ -333,9 +333,10 @@ class ConeDetector:
             detected_object.y2 = y2
             detection_array.objects.append(detected_object)
 
-            if not is_overlapped:
+            if not is_overlapped and class_name == 'unknown':
                 # Get the part of the image within the bounding box
                 object_image = image[y1:y2, x1:x2]
+                _, buffer = cv2.imencode('.jpg', object_image)
                 unknown_object = DetectedObjectWithImage()
                 unknown_object.class_name = class_name
                 unknown_object.probability = class_score
@@ -345,7 +346,7 @@ class ConeDetector:
                 unknown_object.y1 = y1
                 unknown_object.x2 = x2
                 unknown_object.y2 = y2
-                unknown_object.data = object_image.tobytes()
+                unknown_object.data = np.array(buffer).tobytes()
                 unknown_object.image_height = object_image.shape[0]
                 unknown_object.image_width = object_image.shape[1]
                 unknown_object_array.objects.append(unknown_object)
@@ -359,10 +360,16 @@ class ConeDetector:
 
             if coco:  # Draw bounding box and label for COCO classes
                 if class_name == "unknown":
-                    image_with_boxes = cv2.rectangle(image_with_boxes, (x1, y1), (x2, y2), (255, 0, 0), 2)
+                    if is_overlapped:
+                        image_with_boxes = cv2.rectangle(image_with_boxes, (x1, y1), (x2, y2), (255, 0, 0), 2)
+                    else:
+                        image_with_boxes = cv2.rectangle(image_with_boxes, (x1, y1), (x2, y2), (126, 0, 126), 2)
                     image_with_boxes = cv2.putText(image_with_boxes, '{}: {:.2f}'.format(class_name, class_score), (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1, cv2.LINE_AA)
                 else:
-                    image_with_boxes = cv2.rectangle(image_with_boxes, (x1, y1), (x2, y2), (0, 0, 255), 2)
+                    if is_overlapped:
+                        image_with_boxes = cv2.rectangle(image_with_boxes, (x1, y1), (x2, y2), (255, 0, 0), 2)
+                    else:
+                        image_with_boxes = cv2.rectangle(image_with_boxes, (x1, y1), (x2, y2), (126, 0, 126), 2)
                     image_with_boxes = cv2.putText(image_with_boxes, '{}: {:.2f}'.format(class_name, class_score), (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1, cv2.LINE_AA)
             
         return detected_cone_list, data_dict, data_count, detection_array, unknown_object_array, image_with_boxes
