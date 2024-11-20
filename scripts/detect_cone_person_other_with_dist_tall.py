@@ -19,6 +19,8 @@ import os
 IOU_THRESHOLD = 0.1  # Set the IoU threshold for NMS
 OBJECT_CONFIDENCE_THRESHOLD = 0.7
 OTHER_CONFIDENCE_THRESHOLD = 0.03
+COLORS = ['red', 'green', 'blue', 'purple', 'pink', 'orange', 'yellow']
+COLOR_CODES = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (128, 0, 128), (255, 192, 203), (255, 165, 0), (255, 255, 0)]
 
 class StochOccupancyGrid2D(object):
     def __init__(self, resolution, width, height, origin_x, origin_y,
@@ -74,15 +76,19 @@ class StochOccupancyGrid2D(object):
         return occupied_percentage > 20  # Return True if more than 50% of the cells are occupied
 
 
-
 class ConeDetector:
     
     def __init__(self):
+        print("TESTING ************************")
         weights_file = rospy.get_param('~weights_file', '../weights/cone_person.pt')
         self.object_model = YOLO(weights_file)
 
+        print(weights_file)
+
+        coco_labels_file = rospy.get_param('~coco_labels_file', 'yolov8_labels.txt')
+        print(coco_labels_file)
         self.other_model = YOLO('yolov8n.pt')
-        with open('yolo_coco_labels.txt', 'r') as f:
+        with open(coco_labels_file, 'r') as f:
             self.coco_labels = f.read().splitlines()
 
         self.is_turning = False
@@ -179,7 +185,8 @@ class ConeDetector:
             data_count, 
             detection_array, 
             unknown_object_array,
-            image_with_boxes) = self.depth_calculation(object_results, num_detected, depth, trans, rot, 
+            image_with_boxes,
+            image) = self.depth_calculation(object_results, num_detected, depth, trans, rot, 
                                             detected_cone_list, data_dict, data_count, detection_array, 
                                             unknown_object_array, image_with_boxes, image)
         if num_detected_other > 0 and num_detected == 0:
@@ -195,7 +202,8 @@ class ConeDetector:
             data_count, 
             detection_array, 
             unknown_object_array,
-            image_with_boxes) = self.depth_calculation(other_results, num_detected_other, depth, trans, rot, 
+            image_with_boxes,
+            image) = self.depth_calculation(other_results, num_detected_other, depth, trans, rot, 
                                                 detected_cone_list, data_dict, data_count, detection_array, 
                                                 unknown_object_array, image_with_boxes, image, coco=True)
         elif num_detected_other > 0:
@@ -204,7 +212,8 @@ class ConeDetector:
             data_count, 
             detection_array, 
             unknown_object_array,
-            image_with_boxes) = self.depth_calculation(other_results, num_detected_other, depth, trans, rot, 
+            image_with_boxes,
+            image) = self.depth_calculation(other_results, num_detected_other, depth, trans, rot, 
                                                 detected_cone_list, data_dict, data_count, detection_array, 
                                                 unknown_object_array, image_with_boxes, image, coco=True)
 
@@ -224,6 +233,8 @@ class ConeDetector:
 
         # Publish the unknown objects array if any objects exist
         if len(unknown_object_array.objects) > 0:   
+            _, buffer = cv2.imencode('.jpg', image)
+            unknown_object_array.data = np.array(buffer).tobytes()
             self.unknown_object_publisher.publish(unknown_object_array)
 
         end_time = time.time()
@@ -334,22 +345,24 @@ class ConeDetector:
             detection_array.objects.append(detected_object)
 
             if not is_overlapped and class_name == 'unknown':
-                # Get the part of the image within the bounding box
-                object_image = image[y1:y2, x1:x2]
-                _, buffer = cv2.imencode('.jpg', object_image)
-                unknown_object = DetectedObjectWithImage()
-                unknown_object.class_name = class_name
-                unknown_object.probability = class_score
-                unknown_object.pose = detected_object_pose
-                unknown_object.width = object_width
-                unknown_object.x1 = x1
-                unknown_object.y1 = y1
-                unknown_object.x2 = x2
-                unknown_object.y2 = y2
-                unknown_object.data = np.array(buffer).tobytes()
-                unknown_object.image_height = object_image.shape[0]
-                unknown_object.image_width = object_image.shape[1]
-                unknown_object_array.objects.append(unknown_object)
+                if len(unknown_object_array.objects) < len(COLORS):
+
+                    # Get the part of the image within the bounding box
+                    object_image = image[y1:y2, x1:x2]
+                    _, buffer = cv2.imencode('.jpg', object_image)
+                    unknown_object = DetectedObjectWithImage()
+                    unknown_object.class_name = class_name
+                    unknown_object.probability = class_score
+                    unknown_object.pose = detected_object_pose
+                    unknown_object.width = object_width
+                    unknown_object.x1 = x1
+                    unknown_object.y1 = y1
+                    unknown_object.x2 = x2
+                    unknown_object.y2 = y2
+                    unknown_object.color = COLORS[len(unknown_object_array.objects)]
+                    image = cv2.rectangle(image, (x1, y1), (x2, y2), COLOR_CODES[len(unknown_object_array.objects)], 2)
+                    # unknown_object.data = np.array(buffer).tobytes()
+                    unknown_object_array.objects.append(unknown_object)
 
             # Write estimated depth on the image
             image_with_boxes = cv2.putText(image_with_boxes, 'Depth: {:.2f} m'.format(estimated_depth), (x1, y1+15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
@@ -372,7 +385,7 @@ class ConeDetector:
                         image_with_boxes = cv2.rectangle(image_with_boxes, (x1, y1), (x2, y2), (126, 0, 126), 2)
                     image_with_boxes = cv2.putText(image_with_boxes, '{}: {:.2f}'.format(class_name, class_score), (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1, cv2.LINE_AA)
             
-        return detected_cone_list, data_dict, data_count, detection_array, unknown_object_array, image_with_boxes
+        return detected_cone_list, data_dict, data_count, detection_array, unknown_object_array, image_with_boxes, image
 
     def get_depth(self, x_min, y_min, x_max, y_max, depth):
         depth_values = depth[int(y_min):int(y_max), int(x_min):int(x_max)].flatten()

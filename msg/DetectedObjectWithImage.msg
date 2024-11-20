@@ -6,6 +6,4 @@ float32 x1
 float32 y1
 float32 x2
 float32 y2
-uint32 image_height
-uint32 image_width
-uint8[] data
+string color

@@ -8,7 +8,11 @@ import shutil
 import cv2
 import numpy as np
 
-QUERY = 'Provide the basic name of the most prominent object in this image. Provide as consise of a name as possible. For example, "dog" instead of "black dog".'
+QUERY = """Provide the basic name of the most prominent object in each of the bounding boxes delineated by color. 
+           Provide as consise of a name as possible. For example, "dog" instead of "black dog".
+           If any of the bounding boxes appears to having nothing of note, do not include it in the response.
+           The possible colors are red, green, blue, purple, pink, orange, and yellow.
+        """
 
 class UnknownLabeling:
     
@@ -24,15 +28,18 @@ class UnknownLabeling:
 
         # Subscribe to the commanded velocity
         self.is_moving = False
+        self.just_stopped = True
         self.cmd_vel_sub = rospy.Subscriber("/cmd_vel", Twist, self.cmd_vel_callback)
 
         # Subscribe to detected objects
-        self.unknown_sub = rospy.Subscriber("/unknown_objects", DetectedObjectWithImageArray, self.object_callback)
+        self.unknown_sub = rospy.Subscriber("/unknown_objects", DetectedObjectWithImageArray, self.object_callback, queue_size=1)
 
     def cmd_vel_callback(self, msg):
-        if msg.linear.x > 0.01 or msg.angular.z > 0.01:
+        if np.abs(msg.linear.x) > 0.01 or np.abs(msg.angular.z) > 0.01:
             self.is_moving = True
         else:
+            if self.is_moving:
+                self.just_stopped = True
             self.is_moving = False
 
     def path_callback(self, msg):
@@ -40,7 +47,7 @@ class UnknownLabeling:
 
     # TODO Keep track of labeled objects and only ask for the ones that are not labeled
     def object_callback(self, msg):
-        if self.is_moving:
+        if self.is_moving and self.path is not None:
             # Only ask gemini if the object is in our path
             for obj in msg.objects:
                 for pose in self.path.poses:
@@ -57,28 +64,28 @@ class UnknownLabeling:
                         response = requests.post(self.url, json=data)
                         result = response.json()
                         print(result['response'])
-        else:
+        elif self.just_stopped:
+            self.just_stopped = False
+
             # Perform a check for all objects
-             for obj in msg.objects:
+            # Ask gemini to label the object
+            rospy.loginfo("Asking gemini to label object")
+            # Save as a jpg
+            image_name = 'unknown_object.jpg'
+            np_arr = np.frombuffer(msg.data, np.uint8)
+            img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            # Now save to the file
+            cv2.imwrite(image_name, img)
 
-                # Ask gemini to label the object
-                rospy.loginfo("Asking gemini to label object")
-                # Save as a jpg
-                image_name = 'unknown_object.jpg'
-                np_arr = np.frombuffer(obj.data, np.uint8)
-                img = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-                # Now save to the file
-                cv2.imwrite(image_name, img)
+            # Copy image to /gemini_code/
+            shutil.copyfile(image_name, f'../../../../../gemini_code/{image_name}')
+            data = {'query': QUERY, 'query_type': 'image', 'image_name': image_name}
+            response = requests.post(self.url, json=data)
+            result = response.json()
+            print(result['response'])
 
-                # Copy image to /gemini_code/
-                shutil.copyfile(image_name, f'../../../../../gemini_code/{image_name}')
-                data = {'query': QUERY, 'query_type': 'image', 'image_name': image_name}
-                response = requests.post(self.url, json=data)
-                result = response.json()
-                print(result['response'])
-
-                # Shutdown the node
-                rospy.signal_shutdown("All objects labeled")
+            # TODO: Do something with the response
 
     def run(self):
         rospy.spin()
