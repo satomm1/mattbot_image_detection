@@ -4,6 +4,8 @@ from geometry_msgs.msg import PoseWithCovariance, Pose, Twist
 from mattbot_image_detection.msg import DetectedObject, DetectedObjectArray, DetectedObjectWithImage, DetectedObjectWithImageArray
 import message_filters
 from nav_msgs.msg import OccupancyGrid
+from visualization_msgs.msg import Marker, MarkerArray
+from geometry_msgs.msg import Point
 
 import tf
 from tf.transformations import euler_from_quaternion
@@ -45,6 +47,17 @@ class StochOccupancyGrid2D(object):
 
     def get_index(self, x):
         return (np.round((x[0]-self.origin_x)/self.resolution), np.round((x[1]-self.origin_y)/self.resolution))
+
+    def add_to_map(self, x, y, width):
+        x1, y1 = self.get_index((x, y))
+        r = width / 2
+
+        x_min = int(max(0, x1 - r / self.resolution))
+        x_max = int(min(self.width - 1, x1 + r / self.resolution))
+        y_min = int(max(0, y1 - r / self.resolution))
+        y_max = int(min(self.height - 1, y1 + r / self.resolution))
+
+        self.probs[y_min:y_max+1, x_min:x_max+1] = 1.0
 
     def is_overlapped(self, x, y, width, height):
         # Given global x/y coordinates, and width/height of the object in meters, return if the object is overlapped with the map
@@ -98,6 +111,10 @@ class ConeDetector:
         self.publisher = rospy.Publisher('/camera/color/image_with_boxes', Image, queue_size=1)
         self.detected_object_publisher = rospy.Publisher('/detected_objects', DetectedObjectArray, queue_size=10)
         self.unknown_object_publisher = rospy.Publisher('/unknown_objects', DetectedObjectWithImageArray, queue_size=10)
+        self.marker_pub = rospy.Publisher('/text_marker', MarkerArray, queue_size=10)
+
+        self.num_markers = 0
+        self.marker_array = MarkerArray()
 
         camera_info_msg = rospy.wait_for_message("/camera/color/camera_info", CameraInfo)
         camera_info = camera_info_msg.K
@@ -118,6 +135,7 @@ class ConeDetector:
 
         self.tf_listener = tf.TransformListener()
 
+        self.unknown_label_subscriber = rospy.Subscriber('/labeled_unknown_objects', DetectedObjectArray, self.unknown_label_callback, queue_size=10)
         self.cmd_vel_subscriber = rospy.Subscriber('/cmd_vel', Twist, self.cmd_vel_callback, queue_size=1)    
         self.rbg_sub = message_filters.Subscriber('/camera/color/image_raw', Image)
         self.depth_sub = message_filters.Subscriber('/camera/depth/image_raw', Image)
@@ -298,7 +316,7 @@ class ConeDetector:
 
             if object_height < 0.1 or object_width < 0.1:
                 continue  # Skip objects that are too small
-            object_depth = np.min([object_width, object_height])
+            object_depth = np.min([object_width, object_height, 0.33])
             
             hypot = np.sqrt(local_x_center**2 + (estimated_depth + object_depth/2)**2)
 
@@ -309,7 +327,7 @@ class ConeDetector:
 
             is_overlapped = False
             if self.map.is_overlapped(x_map, y_map, object_width, object_height):
-                image_with_boxes = cv2.putText(image_with_boxes, 'Overlapped', (x1, y1+30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
+                # image_with_boxes = cv2.putText(image_with_boxes, 'Overlapped', (x1, y1+30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
                 is_overlapped = True
 
             object_dict = {}
@@ -376,13 +394,15 @@ class ConeDetector:
                     if is_overlapped:
                         image_with_boxes = cv2.rectangle(image_with_boxes, (x1, y1), (x2, y2), (255, 0, 0), 2)
                     else:
-                        image_with_boxes = cv2.rectangle(image_with_boxes, (x1, y1), (x2, y2), (126, 0, 126), 2)
+                        image_with_boxes = cv2.rectangle(image_with_boxes, (x1, y1), (x2, y2), (0, 255, 0), 2)
                     image_with_boxes = cv2.putText(image_with_boxes, '{}: {:.2f}'.format(class_name, class_score), (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1, cv2.LINE_AA)
                 else:
                     if is_overlapped:
                         image_with_boxes = cv2.rectangle(image_with_boxes, (x1, y1), (x2, y2), (255, 0, 0), 2)
                     else:
                         image_with_boxes = cv2.rectangle(image_with_boxes, (x1, y1), (x2, y2), (126, 0, 126), 2)
+                        self.map.add_to_map(x_map, y_map, object_width)
+                        self.publish_text(x_map, y_map, class_name)
                     image_with_boxes = cv2.putText(image_with_boxes, '{}: {:.2f}'.format(class_name, class_score), (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1, cv2.LINE_AA)
             
         return detected_cone_list, data_dict, data_count, detection_array, unknown_object_array, image_with_boxes, image
@@ -410,6 +430,45 @@ class ConeDetector:
             is_turning = True
         else:
             self.is_turning = False
+
+    def unknown_label_callback(self, msg):
+        # For each object, add it to the map
+        for obj in msg.objects:
+            # Get the object's position in the map frame
+            x_map = obj.pose.position.x
+            y_map = obj.pose.position.y
+            object_width = obj.width
+
+            # Add the object to the map
+            self.map.add_to_map(x_map, y_map, object_width)
+            self.publish_text(x_map, y_map, obj.class_name)
+
+    def publish_text(self, x, y, class_name):
+        # Publish to RVIZ
+        marker = Marker()
+        marker.header.frame_id = 'map'
+        marker.header.stamp = rospy.Time.now()
+        marker.ns = "text"
+        marker.id = self.num_markers
+        marker.type = Marker.TEXT_VIEW_FACING
+        marker.action = Marker.ADD
+        marker.text = class_name
+
+        marker.pose.position.x = x
+        marker.pose.position.y = y
+        marker.pose.position.z = 0.5
+        marker.pose.orientation.w = 1.0
+
+        marker.scale.z = 0.1
+        marker.color.a = 1.0
+        marker.color.r = 1.0
+        marker.color.g = 1.0
+        marker.color.b = 1.0
+
+        self.marker_array.markers.append(marker)
+
+        self.marker_pub.publish(self.marker_array)
+        self.num_markers += 1
 
     def run(self):
         rospy.spin()

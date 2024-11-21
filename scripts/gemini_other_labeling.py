@@ -2,11 +2,13 @@ import rospy
 from nav_msgs.msg import OccupancyGrid, Path
 from geometry_msgs.msg import Twist
 from mattbot_image_detection.msg import DetectedObjectWithImage, DetectedObjectWithImageArray
+from mattbot_image_detection.msg import DetectedObject, DetectedObjectArray
 
 import requests
 import shutil
 import cv2
 import numpy as np
+import json
 
 QUERY = """Provide the basic name of the most prominent object in each of the bounding boxes delineated by color. 
            Provide as consise of a name as possible. For example, "dog" instead of "black dog".
@@ -21,6 +23,9 @@ class UnknownLabeling:
         self.url = url
 
         self.map_msg = rospy.wait_for_message("/navigation_map", OccupancyGrid)
+
+        # Publisher for the labeled unknown objects
+        self.labeled_pub = rospy.Publisher("/labeled_unknown_objects", DetectedObjectArray, queue_size=1)
 
         # Subscribe to path
         self.path = None
@@ -46,7 +51,11 @@ class UnknownLabeling:
         self.path = msg
 
     # TODO Keep track of labeled objects and only ask for the ones that are not labeled
+
+    
     def object_callback(self, msg):
+
+        object_array = DetectedObjectArray()
         if self.is_moving and self.path is not None:
             # Only ask gemini if the object is in our path
             for obj in msg.objects:
@@ -83,9 +92,30 @@ class UnknownLabeling:
             data = {'query': QUERY, 'query_type': 'image', 'image_name': image_name}
             response = requests.post(self.url, json=data)
             result = response.json()
-            print(result['response'])
+            result = json.loads(result['response'])
+            # print(result)
+            # print(result['response'])
 
-            # TODO: Do something with the response
+            result_dict = dict()
+            for obj in result:
+                result_dict[obj['bounding_box_color']] = obj['object_name']
+
+            for obj in msg.objects:
+                obj_color = obj.color
+
+                if obj_color not in result_dict:
+                    print(f"Object with color {obj_color} not found in the response")
+                else:
+                    print(f"{obj_color}: {result_dict[obj_color]}")
+                    detected_object = DetectedObject()
+                    detected_object.width = obj.width
+                    detected_object.pose = obj.pose
+                    detected_object.class_name = result_dict[obj_color]
+                    object_array.objects.append(detected_object)
+            
+            if len(object_array.objects) > 0:
+                self.labeled_pub.publish(object_array)
+
 
     def run(self):
         rospy.spin()
