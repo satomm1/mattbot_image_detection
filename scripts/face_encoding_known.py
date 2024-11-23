@@ -19,9 +19,30 @@ for filename in os.listdir(image_directory):
         # Get the face encodings
         face_encodings = face_recognition.face_encodings(image)
         
+        # Remove the file extension
+        filename = os.path.splitext(filename)[0]
+        
+        # Split by _ to get first and last name
+        name_parts = filename.split("_")
+        last_name = name_parts[0]
+        first_name = name_parts[1]
+        if len(name_parts) > 2:
+            title = name_parts[2]
+        else:
+            title = None
+
+        # Combine the parts to get the full name
+        if title:
+            name = f"{title} {first_name} {last_name}"
+        else:
+            name = f"{first_name} {last_name}"
+
+        # Capitalize the first letter of each word
+        name = name.title()
+
         # Assuming each image has only one face
         if face_encodings:
-            encodings_dict[filename] = face_encodings[0]
+            encodings_dict[name] = face_encodings[0]
         else:
             print(f"No face found in {filename}")
 

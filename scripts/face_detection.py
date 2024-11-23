@@ -4,11 +4,14 @@ import cv2
 import numpy as np
 import pickle
 import face_recognition
+import requests
 
 class FaceDetection:
 
-    def __init__(self, cam_index=0):
+    def __init__(self, cam_index=0, url='http://127.0.0.1:5000/gemini'):
         self.face_encodings = self.load_face_encodings()
+
+        self.url = url
 
         # Open the camera
         self.cap = cv2.VideoCapture(cam_index)
@@ -26,6 +29,8 @@ class FaceDetection:
     def run(self):
         rate = rospy.Rate(2)
         print("Running face detection")
+
+        detect_counts = {}
         while not rospy.is_shutdown():
             
             ret, frame = self.cap.read()
@@ -44,6 +49,7 @@ class FaceDetection:
                 face_locations = face_recognition.face_locations(frame)
                 face_encodings = face_recognition.face_encodings(frame, face_locations)
 
+                names_found = []
                 for face_encoding in face_encodings:
                     # Compare the face encodings with the known encodings
                     matches = face_recognition.compare_faces(list(self.face_encodings.values()), face_encoding)
@@ -53,9 +59,39 @@ class FaceDetection:
                         first_match_index = matches.index(True)
                         name = list(self.face_encodings.keys())[first_match_index]
                         print(f"Found {name}")
+                        names_found.append(name)
+
+                        if name in detect_counts:
+                            detect_counts[name] += 1
+                        elif name not in detect_counts:
+                            detect_counts[name] = 1
                     else:
                         print("Unknown person")
 
+                name_three_times = []
+                for name in list(detect_counts.keys()):
+                    
+                    if name not in names_found:
+                        detect_counts[name] = 0
+                    elif detect_counts[name] == 3:
+                        name_three_times.append(name)
+
+                if name_three_times:
+                    if len(name_three_times) == 1:
+                        query = f"Hello, {name_three_times[0]}."
+                    elif len(name_three_times) == 2:
+                        query = f"Hello, {name_three_times[0]} and {name_three_times[1]}."
+                    else:
+                        query = f"Hello, {', '.join(name_three_times[:-1])}, and {name_three_times[-1]}."
+                    
+                    print(query)
+
+                    data = {'query': query, 'query_type': 'face_detection'}
+                    try:
+                        response = requests.post(self.url, json=data)
+                    except requests.exceptions.RequestException as e:
+                        pass
+                    
             rate.sleep()
 
         self.shutdown()
