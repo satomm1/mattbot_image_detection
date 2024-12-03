@@ -9,9 +9,16 @@ import requests
 class FaceDetection:
 
     def __init__(self, cam_index=0, url='http://127.0.0.1:5000/gemini'):
+
+        # Load the known face encodings
+        self.face_encoding_file = rospy.get_param("~face_encoding_file", "face_encodings.pkl")
         self.face_encodings = self.load_face_encodings()
 
+        # URL to send the query to
         self.url = url
+
+        # Get obama file location
+        self.obama_file = rospy.get_param("~obama_file", "obama.jpg")
 
         # Open the camera
         self.cap = cv2.VideoCapture(cam_index)
@@ -23,11 +30,19 @@ class FaceDetection:
             return
 
     def load_face_encodings(self):
-        with open("face_encodings.pkl", "rb") as f:
+        with open(self.face_encoding_file, "rb") as f:
             return pickle.load(f)
 
     def run(self):
         rate = rospy.Rate(2)
+
+        # Load an image and encode it since first encoding takes a long time
+        obama = cv2.imread(self.obama_file)
+        small_frame = cv2.resize(obama, (0, 0), fx=0.1, fy=0.1)
+        face_locations = face_recognition.face_locations(small_frame)
+        obama_encoding = face_recognition.face_encodings(small_frame, face_locations)
+
+
         print("Running face detection")
 
         detect_counts = {}
@@ -40,7 +55,7 @@ class FaceDetection:
                 # small_frame = frame
 
                 # Save image for debugging
-                cv2.imwrite("captured_image.jpg", frame)
+                # cv2.imwrite("captured_image.jpg", frame)
 
                 # Convert the image from BGR color to RGB color
                 # rgb_small_frame = small_frame[:, :, ::-1]

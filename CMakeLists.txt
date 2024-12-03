@@ -177,6 +177,7 @@ catkin_install_python(PROGRAMS
   scripts/detect_cone_person_other_with_dist_tall.py
   scripts/person_tracker.py
   scripts/sort.py
+  scripts/face_detection.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 

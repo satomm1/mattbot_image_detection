@@ -33,9 +33,9 @@ for filename in os.listdir(image_directory):
 
         # Combine the parts to get the full name
         if title:
-            name = f"{title} {first_name} {last_name}"
+            name = f"{title} {last_name}"
         else:
-            name = f"{first_name} {last_name}"
+            name = f"{first_name}"
 
         # Capitalize the first letter of each word
         name = name.title()
