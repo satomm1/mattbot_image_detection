@@ -67,7 +67,7 @@ class FaceDetection:
                 names_found = []
                 for face_encoding in face_encodings:
                     # Compare the face encodings with the known encodings
-                    matches = face_recognition.compare_faces(list(self.face_encodings.values()), face_encoding)
+                    matches = face_recognition.compare_faces(list(self.face_encodings.values()), face_encoding, tolerance=0.52)
 
                     # If a match is found
                     if True in matches:
