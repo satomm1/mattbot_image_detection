@@ -6,12 +6,18 @@ import pickle
 # Directory containing images
 image_directory = "../faculty"
 
-# Dictionary to hold encodings
-encodings_dict = {}
+# Check if face_encodings.pkl already exists
+if os.path.exists("face_encodings.pkl"):
+    # Load the encodings
+    with open("face_encodings.pkl", "rb") as f:
+        encodings_dict = pickle.load(f)
+else:
+    # Dictionary to hold encodings
+    encodings_dict = {}
 
 # Loop through each image in the directory
 for filename in os.listdir(image_directory):
-    if filename.endswith(".jpg") or filename.endswith(".png") or filename.endswith(".jpeg"):
+    if filename.endswith(".jpg") or filename.endswith(".png") or filename.endswith(".jpeg") or filename.endswith(".gif"):
         # Load the image
         image_path = os.path.join(image_directory, filename)
         image = face_recognition.load_image_file(image_path)
