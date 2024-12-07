@@ -174,6 +174,7 @@ catkin_install_python(PROGRAMS
   scripts/detect_coco_with_dist_DDS.py
   scripts/detect_cone_person_with_dist.py
   scripts/detect_cone_person_with_dist_tall.py
+  scripts/detect_cone_person_other_with_dist_short.py
   scripts/detect_cone_person_other_with_dist_tall.py
   scripts/person_tracker.py
   scripts/sort.py

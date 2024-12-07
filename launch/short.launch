@@ -1,0 +1,13 @@
+<!-- cone_person_dist_tall.launch -->
+<launch>
+
+  <arg name="weights_file" default="$(find mattbot_image_detection)/weights/cone_person.pt"/>
+  <arg name="coco_labels_file" default="$(find mattbot_image_detection)/scripts/yolov8_labels.txt"/>
+
+  <!-- Launch the cone detector script -->
+  <node name="image_detector_node" pkg="mattbot_image_detection" type="detect_cone_person_other_with_dist_short.py" output="log">
+    <param name="weights_file" value="$(arg weights_file)" />
+    <param name="coco_labels_file" value="$(arg coco_labels_file)" />
+  </node>
+
+</launch>
