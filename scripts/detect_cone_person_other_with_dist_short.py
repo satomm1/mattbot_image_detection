@@ -369,6 +369,8 @@ class ConeDetector:
                     unknown_object.x2 = x2
                     unknown_object.y2 = y2
                     unknown_object.color = COLORS[len(unknown_object_array.objects)]
+                    # Include the bounding box image in the message
+                    unknown_object.data = np.array(buffer)[x1:x2, y1:y2].tobytes()
                     image = cv2.rectangle(image, (x1, y1), (x2, y2), COLOR_CODES[len(unknown_object_array.objects)], 2)
                     # unknown_object.data = np.array(buffer).tobytes()
                     unknown_object_array.objects.append(unknown_object)
@@ -395,7 +397,7 @@ class ConeDetector:
                         self.map.add_to_map(x_map, y_map, object_width)
                         self.publish_text(x_map, y_map, class_name)
                     image_with_boxes = cv2.putText(image_with_boxes, '{}: {:.2f}'.format(class_name, class_score), (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1, cv2.LINE_AA)
-            
+
         return detected_cone_list, data_dict, data_count, detection_array, unknown_object_array, image_with_boxes, image
 
     def get_depth(self, x_min, y_min, x_max, y_max, depth):
