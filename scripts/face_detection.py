@@ -5,6 +5,7 @@ import numpy as np
 import pickle
 import face_recognition
 import requests
+import os
 
 class FaceDetection:
 
@@ -13,6 +14,8 @@ class FaceDetection:
         # Load the known face encodings
         self.face_encoding_file = rospy.get_param("~face_encoding_file", "face_encodings.pkl")
         self.face_encodings = self.load_face_encodings()
+
+        self.save_new_face_dir = rospy.get_param("~save_new_face_dir", "./")
 
         # URL to send the query to
         self.url = url
@@ -106,6 +109,54 @@ class FaceDetection:
                         response = requests.post(self.url, json=data)
                     except requests.exceptions.RequestException as e:
                         pass
+
+            # Determine if need to take an image
+            data = {'query': 'need_picture', 'query_type': 'need_picture'}
+            try:
+                response = requests.post(self.url, json=data)
+                response = response.json()
+                if response['response'] == 'yes':
+                    # We need to take a picture
+                    print("Preparing to capture image")
+                    
+                    rospy.sleep(6) # Wait for 5 seconds to prepare
+
+                    # Capture the image
+                    ret, frame = self.cap.read()
+                    if ret:
+
+                        print("Captured image")
+                    else:
+                        print("Error: Could not capture image.")
+
+                    # Now we need to get corresponding name
+                    have_name = False
+                    while not have_name:
+                        # Ask for name
+                        data = {'query': 'need_name', 'query_type': 'need_name'}
+                        try:
+                            response = requests.post(self.url, json=data)
+                            response = response.json()
+                            if response['response'] != 'no' and response['response'] != 'canceled':
+                                name = response['response']
+                                have_name = True
+                                print(f"Received name: {name}")
+
+                                # Save the image
+                                save_dir = os.path.join(self.save_new_face_dir, f"{name}.jpg")
+                                cv2.imwrite(save_dir, frame)
+                            elif response['response'] == 'canceled':
+                                print("Image capture canceled")
+                                have_name = True
+                            else:
+                                rospy.sleep(1)
+                        except requests.exceptions.RequestException as e:
+                            pass
+
+                    
+            except requests.exceptions.RequestException as e:
+                pass
+
                     
             rate.sleep()
 
