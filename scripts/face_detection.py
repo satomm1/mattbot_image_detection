@@ -1,4 +1,5 @@
 import rospy
+from mattbot_image_detection.msg import FaceEncoding
 
 import cv2
 import numpy as np
@@ -16,6 +17,7 @@ class FaceDetection:
         self.face_encodings = self.load_face_encodings()
 
         self.save_new_face_dir = rospy.get_param("~save_new_face_dir", "./")
+        self.new_face_encoding_publisher = rospy.Publisher('/new_face_encoding', FaceEncoding, queue_size=10)
 
         # URL to send the query to
         self.url = url
@@ -174,6 +176,12 @@ class FaceDetection:
                                 if face_encodings:
                                     self.face_encodings[name] = face_encodings[0]
                                     print(f"Saved encoding for {name}")
+
+                                    # Publish the new face encoding
+                                    face_encoding_msg = FaceEncoding()
+                                    face_encoding_msg.encoding = list(face_encodings[0])
+                                    face_encoding_msg.name = name
+                                    self.new_face_encoding_publisher.publish(face_encoding_msg)
                                 else:
                                     print(f"No face found in {save_dir}")
 

@@ -58,6 +58,7 @@ add_message_files(
   DetectedObjectWithImageArray.msg
   Person.msg
   PersonArray.msg
+  FaceEncoding.msg
 )
 
 ## Generate services in the 'srv' folder
