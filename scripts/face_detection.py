@@ -18,6 +18,7 @@ class FaceDetection:
 
         self.save_new_face_dir = rospy.get_param("~save_new_face_dir", "./")
         self.new_face_encoding_publisher = rospy.Publisher('/new_face_encoding', FaceEncoding, queue_size=10)
+        self.new_face_encoding_subscriber = rospy.Subscriber('/new_face_encoding', FaceEncoding, self.face_encoding_callback, queue_size=10)
 
         # URL to send the query to
         self.url = url
@@ -181,6 +182,7 @@ class FaceDetection:
                                     face_encoding_msg = FaceEncoding()
                                     face_encoding_msg.encoding = list(face_encodings[0])
                                     face_encoding_msg.name = name
+                                    face_encoding_msg.external = False
                                     self.new_face_encoding_publisher.publish(face_encoding_msg)
                                 else:
                                     print(f"No face found in {save_dir}")
@@ -201,6 +203,20 @@ class FaceDetection:
             rate.sleep()
 
         self.shutdown()
+
+    def face_encoding_callback(self, msg):
+        # Convert the Float64MultiArray to a list
+        external = msg.external
+        if not external:
+            return  # We only want to save external face encodings
+        
+        face_encoding = list(msg.encoding)
+        name = msg.name
+        
+        # Save the face encoding
+        self.face_encodings[name] = np.array(face_encoding)
+
+        print(f"Added external face encoding for {name}")
 
     def shutdown(self):
         # Release the camera
