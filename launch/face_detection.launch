@@ -6,9 +6,10 @@
   <arg name="obama_file" value="$(find mattbot_image_detection)/scripts/obama.jpg" />
 
   <!-- Launch the person tracker script -->
-  <node name="face_detection" pkg="mattbot_image_detection" type="face_detection.py" output="log">
+  <node name="face_detection" pkg="mattbot_image_detection" type="face_detection.py" output="screen">
     <param name="~face_encoding_file" value="$(arg face_encoding_file)" />
     <param name="~obama_file" value="$(arg obama_file)" />
+    <param name="~save_new_face_dir" value="$(find mattbot_image_detection)/faces/" />
   </node>
 
 </launch>

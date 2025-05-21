@@ -175,7 +175,7 @@ class FaceDetection:
                                     self.face_encodings[name] = face_encodings[0]
                                     print(f"Saved encoding for {name}")
                                 else:
-                                    print(f"No face found in {filename}")
+                                    print(f"No face found in {save_dir}")
 
                             elif response['response'] == 'canceled':
                                 print("Image capture canceled")
