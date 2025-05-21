@@ -49,6 +49,8 @@ class FaceDetection:
         print("Running face detection")
 
         detect_counts = {}
+        num_unknown = 0
+        last_unknown_time = rospy.get_time()
         while not rospy.is_shutdown():
             
             ret, frame = self.cap.read()
@@ -83,8 +85,11 @@ class FaceDetection:
                             detect_counts[name] += 1
                         elif name not in detect_counts:
                             detect_counts[name] = 1
+
+                        num_unknown = 0
                     else:
                         print("Unknown person")
+                        num_unknown += 1
 
                 name_three_times = []
                 for name in list(detect_counts.keys()):
@@ -109,6 +114,18 @@ class FaceDetection:
                         response = requests.post(self.url, json=data)
                     except requests.exceptions.RequestException as e:
                         pass
+
+                if num_unknown > 3 and rospy.get_time() - last_unknown_time > 10:
+                    # Send a message to the server
+                    data = {'query': 'I don\'t recognize you, please press the \'Take Picture\' button!', 'query_type': 'face_detection'}
+                    try:
+                        response = requests.post(self.url, json=data)
+                    except requests.exceptions.RequestException as e:
+                        pass
+                    
+                    num_unknown = 0
+
+                    last_unknown_time = rospy.get_time()
 
             # Determine if need to take an image
             data = {'query': 'need_picture', 'query_type': 'need_picture'}
@@ -145,6 +162,21 @@ class FaceDetection:
                                 # Save the image
                                 save_dir = os.path.join(self.save_new_face_dir, f"{name}.jpg")
                                 cv2.imwrite(save_dir, frame)
+
+                                image = face_recognition.load_image_file(save_dir)
+        
+                                # Get the face encodings
+                                face_encodings = face_recognition.face_encodings(image)
+
+                                name = name.title()
+
+                                # Assuming each image has only one face
+                                if face_encodings:
+                                    self.face_encodings[name] = face_encodings[0]
+                                    print(f"Saved encoding for {name}")
+                                else:
+                                    print(f"No face found in {filename}")
+
                             elif response['response'] == 'canceled':
                                 print("Image capture canceled")
                                 have_name = True
@@ -166,6 +198,10 @@ class FaceDetection:
         # Release the camera
         self.cap.release()
         cv2.destroyAllWindows()
+
+        # Save the updated face encodings
+        with open(self.face_encoding_file, "wb") as f:
+            pickle.dump(self.face_encodings, f)
 
 if __name__ == "__main__":
     rospy.init_node("face_detection")
