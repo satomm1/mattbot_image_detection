@@ -2,3 +2,4 @@
 *.jpeg
 person*.txt
 *.pth
+!obama.jpg
