@@ -40,7 +40,7 @@ class FaceDetection:
             return pickle.load(f)
 
     def run(self):
-        rate = rospy.Rate(2)
+        rate = rospy.Rate(0.66)
 
         # Load an image and encode it since first encoding takes a long time
         obama = cv2.imread(self.obama_file)
@@ -58,19 +58,14 @@ class FaceDetection:
             
             ret, frame = self.cap.read()
             if ret:
-                # Resize the frame
-                # small_frame = cv2.resize(frame, (0, 0), fx=0.25, fy=0.25)
-                # small_frame = frame
-
-                # Save image for debugging
-                # cv2.imwrite("captured_image.jpg", frame)
-
-                # Convert the image from BGR color to RGB color
-                # rgb_small_frame = small_frame[:, :, ::-1]
-
                 # Find all the faces in the current frame of video
                 face_locations = face_recognition.face_locations(frame)
                 face_encodings = face_recognition.face_encodings(frame, face_locations)
+
+                if len(face_encodings) == 0:
+                    rate = rospy.Rate(0.66)  # Slow down if no faces are detected
+                else:
+                    rate = rospy.Rate(2)  # Speed up if faces are detected
 
                 names_found = []
                 for face_encoding in face_encodings:
