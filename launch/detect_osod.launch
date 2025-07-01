@@ -1,0 +1,34 @@
+<!-- detect.launch -->
+<launch>
+
+  <arg name="tall" default="false"/>
+
+  <arg name="weights_file" default="$(find image_detection_with_unknowns)/weights/osod.pt"/>
+  <arg name="labels_file" default="$(find image_detection_with_unknowns)/scripts/labels.txt"/>
+
+  <arg name="clip_model" default="$(find image_detection_with_unknowns)/scripts/checkpoints/mobileclip_s0.pt"/>
+  <arg name="root_dir" default="$(find image_detection_with_unknowns)/src/mobileclip"/>
+
+  <arg name="save_dir" default="$(find image_detection_with_unknowns)/images/"/>
+
+  <!-- Launch the object detection script -->
+  <node name="image_detector_node" pkg="image_detection_with_unknowns" type="detect.py" output="screen">
+    <param name="tall" value="$(arg tall)" />
+    <param name="weights_file" value="$(arg weights_file)" />
+    <param name="labels_file" value="$(arg labels_file)" />
+    <param name="clip_model" value="$(arg clip_model)" />
+    <param name="root_dir" value="$(arg root_dir)" />
+  </node>
+
+  <!-- Launch the gemini bridge -->
+  <node name="gemini_bridge" pkg="image_detection_with_unknowns" type="gemini_bridge.py" output="screen" />
+
+  <!-- Launch the image saver -->
+  <!-- <node name="image_saver" pkg="image_detection_with_unknowns" type="image_saver.py" output="screen">
+    <param name="save_dir" value="$(arg save_dir)" />
+  </node> -->
+
+  <node name="image_sender" pkg="image_detection_with_unknowns" type="dds_image_sender.py" output="screen">
+  </node> 
+
+</launch>

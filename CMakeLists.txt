@@ -23,7 +23,7 @@ find_package(catkin REQUIRED COMPONENTS
 ## Uncomment this if the package has a setup.py. This macro ensures
 ## modules and global scripts declared therein get installed
 ## See http://ros.org/doc/api/catkin/html/user_guide/setup_dot_py.html
-# catkin_python_setup()
+catkin_python_setup()
 
 ################################################
 ## Declare ROS messages, services and actions ##
@@ -59,6 +59,8 @@ add_message_files(
   Person.msg
   PersonArray.msg
   FaceEncoding.msg
+  LabeledObject.msg
+  LabeledObjectArray.msg
 )
 
 ## Generate services in the 'srv' folder
@@ -180,6 +182,9 @@ catkin_install_python(PROGRAMS
   scripts/person_tracker.py
   scripts/sort.py
   scripts/face_detection.py
+  scripts/detect_osod.py
+  scripts/detect_with_dist_osod.py
+  scripts/gemini_bridge.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
