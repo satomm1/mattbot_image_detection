@@ -1,0 +1,12 @@
+unknown
+person
+bench
+backpack
+handbag
+chair
+potted plant
+laptop
+mouse
+keyboard
+cell phone
+cone
