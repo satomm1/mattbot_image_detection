@@ -2,7 +2,7 @@ import rospy
 from sensor_msgs.msg import Image, CameraInfo, PointCloud2
 from geometry_msgs.msg import PoseWithCovariance, Pose, Twist
 from mattbot_image_detection.msg import DetectedObject, DetectedObjectArray, DetectedObjectWithImage, DetectedObjectWithImageArray
-from image_detection_with_unknowns.msg import LabeledObject, LabeledObjectArray
+from mattbot_image_detection.msg import LabeledObject, LabeledObjectArray
 import message_filters
 from nav_msgs.msg import OccupancyGrid
 from geometry_msgs.msg import Point
@@ -124,12 +124,12 @@ class Detector:
 
         self.model_conf = min(KNOWN_OBJECT_THRESHOLD, UNKNOWN_OBJECT_THRESHOLD)
 
-        # Load the CLIP model and tokenizer
-        clip_model = rospy.get_param('~clip_model', 'checkpoints/mobileclip_s0.pt')
-        root_dir = rospy.get_param('~root_dir', None)
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.clip_model, _, self.clip_preprocess = mobileclip.create_model_and_transforms('mobileclip_s0', pretrained=clip_model, root_dir=root_dir, device=self.device)
-        self.tokenizer = mobileclip.get_tokenizer('mobileclip_s0', root_dir=root_dir)
+        # # Load the CLIP model and tokenizer
+        # clip_model = rospy.get_param('~clip_model', 'checkpoints/mobileclip_s0.pt')
+        # root_dir = rospy.get_param('~root_dir', None)
+        # self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        # self.clip_model, _, self.clip_preprocess = mobileclip.create_model_and_transforms('mobileclip_s0', pretrained=clip_model, root_dir=root_dir, device=self.device)
+        # self.tokenizer = mobileclip.get_tokenizer('mobileclip_s0', root_dir=root_dir)
 
         # Initialize variables for storing object names and text features for the CLIP model
         self.object_names = ["cone"]
@@ -147,6 +147,7 @@ class Detector:
         self.is_static = False
         self.queried_while_static = False
         self.time_since_static = 0
+        self.last_query_time = 0
 
         # Create the publisher that will show image with bounding boxes
         self.boxes_publisher = rospy.Publisher('/camera/color/image_with_boxes', Image, queue_size=1)
@@ -336,11 +337,13 @@ class Detector:
             unknown_object_array.data = np.array(buffer).tobytes()
 
             # print(time.time() - self.time_since_static)
-            if not self.is_static or not self.queried_while_static or time.time() - self.time_since_static > 10:
+            time_since_last_query = time.time() - self.last_query_time
+            if (not self.is_static and time_since_last_query > 1) or not self.queried_while_static or time.time() - self.time_since_static > 20:
                 # Only publish if not static
                 self.unknown_object_publisher.publish(unknown_object_array)  # Publish the unknown objects
 
                 print("Published unknown objects")
+                self.last_query_time = time.time()
 
                 if self.is_static:
                     self.queried_while_static = True
@@ -554,43 +557,47 @@ class Detector:
 
     def clip_classify(self, img):
         
-        if len(self.object_names) < 2 or self.text_features is None:
-            # We require at least 2 clip names to classify
             return "unknown"
 
-        # Preprocess the image
-        img = PILImage.fromarray(img)
-        img = self.clip_preprocess(img).unsqueeze(0)
+        # if len(self.object_names) < 2 or self.text_features is None:
+        #     # We require at least 2 clip names to classify
+        #     return "unknown"
 
-        # Encode the image
-        with torch.no_grad(), torch.cuda.amp.autocast():
-            img = img.to(self.device, dtype=torch.float16)
-            img_features = self.clip_model.encode_image(img)
-            img_features /= img_features.norm(dim=-1, keepdim=True)
+        # # Preprocess the image
+        # img = PILImage.fromarray(img)
+        # img = self.clip_preprocess(img).unsqueeze(0)
 
-            # Calculate the similarity scores between the image and text features
-            text_scores = (100.0 * img_features @ self.text_features.T)
+        # # Encode the image
+        # with torch.no_grad(), torch.cuda.amp.autocast():
+        #     img = img.to(self.device, dtype=torch.float16)
+        #     img_features = self.clip_model.encode_image(img)
+        #     img_features /= img_features.norm(dim=-1, keepdim=True)
+
+        #     # Calculate the similarity scores between the image and text features
+        #     text_scores = (100.0 * img_features @ self.text_features.T)
         
-        ranked_scores = torch.argsort(text_scores, descending=True).cpu().numpy()[0]
-        # Get ratio of top score to second score
-        text_scores = text_scores.cpu().numpy()[0]
-        ratio = text_scores[ranked_scores[0]] / text_scores[ranked_scores[1]]
+        # ranked_scores = torch.argsort(text_scores, descending=True).cpu().numpy()[0]
+        # # Get ratio of top score to second score
+        # text_scores = text_scores.cpu().numpy()[0]
+        # ratio = text_scores[ranked_scores[0]] / text_scores[ranked_scores[1]]
 
-        if ratio > 1.4:
-            return self.object_names[ranked_scores[0]]
-        else:
-            return "unknown"
+        # if ratio > 1.4:
+        #     return self.object_names[ranked_scores[0]]
+        # else:
+        #     return "unknown"
 
         
     def update_text_features(self):
 
-        # Get updated tokens
-        self.text = self.tokenizer(self.object_names).to(self.device)
+        pass
 
-        # Get the text features
-        with torch.no_grad(), torch.cuda.amp.autocast():
-            self.text_features = self.clip_model.encode_text(self.text)
-            self.text_features /= self.text_features.norm(dim=-1, keepdim=True)
+        # # Get updated tokens
+        # self.text = self.tokenizer(self.object_names).to(self.device)
+
+        # # Get the text features
+        # with torch.no_grad(), torch.cuda.amp.autocast():
+        #     self.text_features = self.clip_model.encode_text(self.text)
+        #     self.text_features /= self.text_features.norm(dim=-1, keepdim=True)
 
 
     def cmd_vel_callback(self, msg):
