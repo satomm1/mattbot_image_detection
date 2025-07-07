@@ -1,6 +1,6 @@
 import rospy
 from mattbot_image_detection.msg import DetectedObjectWithImageArray
-from image_detection_with_unknowns.msg import LabeledObject, LabeledObjectArray
+from mattbot_image_detection.msg import LabeledObject, LabeledObjectArray
 
 import requests
 import shutil
@@ -33,6 +33,7 @@ QUERY = """Provide the basic name of the most prominent object in each of the bo
            'medium' means we should avoid a region near the object, and 'high' means we should avoid all areas near the object.
            is_static should be set to True if the object is static and does not move by itself. is_static should be set to False if the object 
            cannot move by itself.
+           Only include objects that should be included for a mobile robot to navigate around. Objects that are not relevant should not be included in the response.
            The possible colors of the bounding boxes are red, green, blue, purple, pink, orange, and yellow.
         """
 

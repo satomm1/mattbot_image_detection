@@ -4,7 +4,7 @@ import rospy
 from sensor_msgs.msg import Image, CameraInfo, PointCloud2
 from geometry_msgs.msg import PoseWithCovariance, Pose, Twist
 from mattbot_image_detection.msg import DetectedObject, DetectedObjectArray, DetectedObjectWithImage, DetectedObjectWithImageArray
-from image_detection_with_unknowns.msg import LabeledObject, LabeledObjectArray
+from mattbot_image_detection.msg import LabeledObject, LabeledObjectArray
 import message_filters
 from nav_msgs.msg import OccupancyGrid
 from visualization_msgs.msg import Marker, MarkerArray
@@ -43,7 +43,7 @@ Usage:
     Run this script as a ROS node to perform object detection on incoming camera images and publish results.
 """
 
-KNOWN_OBJECT_THRESHOLD = 0.4
+KNOWN_OBJECT_THRESHOLD = 0.3
 UNKNOWN_OBJECT_THRESHOLD = 0.25
 
 IOU_THRESHOLD = 0.1  # Set the IoU threshold for NMS
@@ -57,11 +57,11 @@ class Detector:
     
     def __init__(self):
         # Load the YOLO detector model
-        weights_file = rospy.get_param('~weights_file', '../weights/osod.pt')
+        weights_file = rospy.get_param('~weights_file', '../weights/osod_updated.pt')
         self.model = YOLO(weights_file)
 
         # Get the corresponding labels for the classes
-        labels_file = rospy.get_param('~labels_file', 'labels.txt')
+        labels_file = rospy.get_param('~labels_file', 'updated_labels.txt')
         with open(labels_file, 'r') as f:
             self.labels = f.read().splitlines()
         print("Using model " + weights_file)
@@ -114,7 +114,7 @@ class Detector:
         # if not self.saved_image:
         #     # Save the first image as a reference
         #     image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        #     cv2.imwrite('/workspace/catkin_ws/src/image_detection_with_unknowns/scripts/reference_image.jpg', image)
+        #     cv2.imwrite('/workspace/catkin_ws/src/mattbot_image_detection/scripts/reference_image.jpg', image)
         #     self.saved_image = True
 
         # Perform object detection using YOLO
@@ -225,7 +225,7 @@ class Detector:
                 # Save image_with_boxes as labeled_image.jpg
                 # convert image_with_boxes to RGB
                 image_with_boxes = cv2.cvtColor(image_with_boxes, cv2.COLOR_BGR2RGB)
-                cv2.imwrite('/workspace/catkin_ws/src/image_detection_with_unknowns/scripts/labeled_image.jpg', image_with_boxes)
+                cv2.imwrite('/workspace/catkin_ws/src/mattbot_image_detection/scripts/labeled_image.jpg', image_with_boxes)
                 self.first_time = False
 
         end_time = time.time()
