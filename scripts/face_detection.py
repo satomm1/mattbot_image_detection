@@ -75,10 +75,10 @@ class FaceDetection:
                     face_locations = face_recognition.face_locations(frame)
                     face_encodings = face_recognition.face_encodings(frame, face_locations)
 
-                    if len(face_encodings) == 0:
-                        rate = rospy.Rate(0.66)  # Slow down if no faces are detected
-                    else:
-                        rate = rospy.Rate(2)  # Speed up if faces are detected
+                    # if len(face_encodings) == 0:
+                    #     rate = rospy.Rate(0.66)  # Slow down if no faces are detected
+                    # else:
+                    #     rate = rospy.Rate(2)  # Speed up if faces are detected
 
                     names_found = []
                     for face_encoding in face_encodings:
@@ -107,7 +107,7 @@ class FaceDetection:
                         
                         if name not in names_found:
                             detect_counts[name] = 0
-                        elif detect_counts[name] == 3:
+                        elif detect_counts[name] == 2:
                             name_three_times.append(name)
 
                     if name_three_times:
@@ -126,7 +126,7 @@ class FaceDetection:
                         except requests.exceptions.RequestException as e:
                             pass
 
-                    if num_unknown > 3 and rospy.get_time() - last_unknown_time > 10:
+                    if num_unknown > 2 and rospy.get_time() - last_unknown_time > 10:
                         # Send a message to the server
                         data = {'query': 'I don\'t recognize you, please press the \'Take Picture\' button!', 'query_type': 'face_detection'}
                         try:
