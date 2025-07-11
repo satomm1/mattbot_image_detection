@@ -56,12 +56,10 @@ class FaceDetection:
         # Load an image and encode it since first encoding takes a long time
         obama = cv2.imread(self.obama_file)
         small_frame = cv2.resize(obama, (0, 0), fx=0.1, fy=0.1)
-        face_locations = face_recognition.face_locations(small_frame)
-        obama_encoding = face_recognition.face_encodings(small_frame, face_locations)
-
+        face_locations = face_recognition.face_locations(small_frame, model='cnn')
+        face_recognition.face_encodings(small_frame, face_locations)
 
         print("Running face detection")
-
         detect_counts = {}
         num_unknown = 0
         last_unknown_time = rospy.get_time()
@@ -72,71 +70,68 @@ class FaceDetection:
                 ret, frame = self.cap.read()
                 if ret:
                     # Find all the faces in the current frame of video
-                    face_locations = face_recognition.face_locations(frame)
-                    face_encodings = face_recognition.face_encodings(frame, face_locations)
+                    face_locations = face_recognition.face_locations(frame, model='cnn')
+                    if len(face_locations) != 0:
+                        
+                        face_encodings = face_recognition.face_encodings(frame, face_locations)
 
-                    # if len(face_encodings) == 0:
-                    #     rate = rospy.Rate(0.66)  # Slow down if no faces are detected
-                    # else:
-                    #     rate = rospy.Rate(2)  # Speed up if faces are detected
+                        names_found = []
+                        for face_encoding in face_encodings:
+                            # Compare the face encodings with the known encodings
+                            matches = face_recognition.compare_faces(list(self.face_encodings.values()), face_encoding, tolerance=0.52)
 
-                    names_found = []
-                    for face_encoding in face_encodings:
-                        # Compare the face encodings with the known encodings
-                        matches = face_recognition.compare_faces(list(self.face_encodings.values()), face_encoding, tolerance=0.52)
+                            # If a match is found
+                            if True in matches:
+                                first_match_index = matches.index(True)
+                                name = list(self.face_encodings.keys())[first_match_index]
+                                print(f"Found {name}")
+                                names_found.append(name)
 
-                        # If a match is found
-                        if True in matches:
-                            first_match_index = matches.index(True)
-                            name = list(self.face_encodings.keys())[first_match_index]
-                            print(f"Found {name}")
-                            names_found.append(name)
+                                if name in detect_counts:
+                                    detect_counts[name] += 1
+                                elif name not in detect_counts:
+                                    detect_counts[name] = 1
 
-                            if name in detect_counts:
-                                detect_counts[name] += 1
-                            elif name not in detect_counts:
-                                detect_counts[name] = 1
+                                num_unknown = 0
+                            else:
+                                print("Unknown person")
+                                num_unknown += 1
 
+                        name_three_times = []
+                        for name in list(detect_counts.keys()):
+                            
+                            if name not in names_found:
+                                detect_counts[name] = 0
+                            elif detect_counts[name] == 2:
+                                name_three_times.append(name)
+
+                        if name_three_times:
+                            if len(name_three_times) == 1:
+                                query = f"Hello, {name_three_times[0]}."
+                            elif len(name_three_times) == 2:
+                                query = f"Hello, {name_three_times[0]} and {name_three_times[1]}."
+                            else:
+                                query = f"Hello, {', '.join(name_three_times[:-1])}, and {name_three_times[-1]}."
+                            
+                            print(query)
+
+                            data = {'query': query, 'query_type': 'face_detection'}
+                            try:
+                                response = requests.post(self.url, json=data)
+                            except requests.exceptions.RequestException as e:
+                                pass
+
+                        if num_unknown > 2 and rospy.get_time() - last_unknown_time > 10:
+                            # Send a message to the server
+                            data = {'query': 'I don\'t recognize you, please press the \'Take Picture\' button!', 'query_type': 'face_detection'}
+                            try:
+                                response = requests.post(self.url, json=data)
+                            except requests.exceptions.RequestException as e:
+                                pass
+                            
                             num_unknown = 0
-                        else:
-                            print("Unknown person")
-                            num_unknown += 1
 
-                    name_three_times = []
-                    for name in list(detect_counts.keys()):
-                        
-                        if name not in names_found:
-                            detect_counts[name] = 0
-                        elif detect_counts[name] == 2:
-                            name_three_times.append(name)
-
-                    if name_three_times:
-                        if len(name_three_times) == 1:
-                            query = f"Hello, {name_three_times[0]}."
-                        elif len(name_three_times) == 2:
-                            query = f"Hello, {name_three_times[0]} and {name_three_times[1]}."
-                        else:
-                            query = f"Hello, {', '.join(name_three_times[:-1])}, and {name_three_times[-1]}."
-                        
-                        print(query)
-
-                        data = {'query': query, 'query_type': 'face_detection'}
-                        try:
-                            response = requests.post(self.url, json=data)
-                        except requests.exceptions.RequestException as e:
-                            pass
-
-                    if num_unknown > 2 and rospy.get_time() - last_unknown_time > 10:
-                        # Send a message to the server
-                        data = {'query': 'I don\'t recognize you, please press the \'Take Picture\' button!', 'query_type': 'face_detection'}
-                        try:
-                            response = requests.post(self.url, json=data)
-                        except requests.exceptions.RequestException as e:
-                            pass
-                        
-                        num_unknown = 0
-
-                        last_unknown_time = rospy.get_time()
+                            last_unknown_time = rospy.get_time()
 
                 # Determine if need to take an image
                 data = {'query': 'need_picture', 'query_type': 'need_picture'}
