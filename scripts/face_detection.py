@@ -1,5 +1,6 @@
 import rospy
 from mattbot_image_detection.msg import FaceEncoding
+from std_msgs.msg import Bool
 from geometry_msgs.msg import Twist
 
 import cv2
@@ -36,6 +37,9 @@ class FaceDetection:
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)  # Set the width
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)  # Set the height
 
+        self.is_voice_processing = False
+        rospy.Subscriber('/voice_processing', Bool, self.voice_processing_callback, queue_size=10)
+
         if not self.cap.isOpened():
             print("Error: Could not open the camera.")
             return
@@ -45,6 +49,9 @@ class FaceDetection:
             self.is_moving = True  
         else:
             self.is_moving = False     
+        
+    def voice_processing_callback(self, msg):
+        self.is_voice_processing = msg.data
 
     def load_face_encodings(self):
         with open(self.face_encoding_file, "rb") as f:
@@ -65,7 +72,8 @@ class FaceDetection:
         last_unknown_time = rospy.get_time()
         while not rospy.is_shutdown():
 
-            if not self.is_moving:
+            if not self.is_moving and not self.is_voice_processing:
+                # If the robot is moving or voice processing is active, skip face detection
             
                 ret, frame = self.cap.read()
                 if ret:
