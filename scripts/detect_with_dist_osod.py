@@ -325,8 +325,7 @@ class Detector:
         self.boxes_publisher.publish(image_msg)
 
         # Publish the known objects
-        if len(detection_array.objects) > 0:
-            self.detected_object_publisher.publish(detection_array)
+        self.detected_object_publisher.publish(detection_array)
 
         # Publish the unknown objects
         if len(unknown_object_array.objects) > 0:   
