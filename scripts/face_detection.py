@@ -56,7 +56,7 @@ class FaceDetection:
         # Load an image and encode it since first encoding takes a long time
         obama = cv2.imread(self.obama_file)
         small_frame = cv2.resize(obama, (0, 0), fx=0.1, fy=0.1)
-        face_locations = face_recognition.face_locations(small_frame, model='cnn')
+        face_locations = face_recognition.face_locations(small_frame, number_of_times_to_upsample=0, model='cnn')
         face_recognition.face_encodings(small_frame, face_locations)
 
         print("Running face detection")
@@ -70,7 +70,9 @@ class FaceDetection:
                 ret, frame = self.cap.read()
                 if ret:
                     # Find all the faces in the current frame of video
-                    face_locations = face_recognition.face_locations(frame, model='cnn')
+                    frame = cv2.resize(frame, (0, 0), fx=0.7, fy=0.7)  # Resize the frame to speed up processing
+                    face_locations = face_recognition.face_locations(frame, number_of_times_to_upsample=1, model='cnn')
+
                     if len(face_locations) != 0:
                         
                         face_encodings = face_recognition.face_encodings(frame, face_locations)
