@@ -104,7 +104,7 @@ class GeminiBridge:
             try:
                 response = requests.post(self.server, json=data)
             except:
-                print("Error sending image to the LLM")
+                # print("Error sending image to the LLM")
                 return
             response = response.json()['response']
             response = json.loads(response)
