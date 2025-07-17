@@ -20,7 +20,7 @@ import numpy as np
 import cv2
 import time
 
-KNOWN_OBJECT_THRESHOLD = 0.4
+KNOWN_OBJECT_THRESHOLD = 0.6
 UNKNOWN_OBJECT_THRESHOLD = 0.25
 
 IOU_THRESHOLD = 0.1  # Set the IoU threshold for NMS
@@ -346,7 +346,7 @@ class Detector:
                 # Only publish if not static
                 self.unknown_object_publisher.publish(unknown_object_array)  # Publish the unknown objects
 
-                print("Published unknown objects")
+                # print("Published unknown objects")
                 self.last_query_time = time.time()
 
                 if self.is_static:
