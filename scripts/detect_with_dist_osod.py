@@ -6,6 +6,7 @@ from mattbot_image_detection.msg import LabeledObject, LabeledObjectArray
 import message_filters
 from nav_msgs.msg import OccupancyGrid
 from geometry_msgs.msg import Point
+from mattbot_dds.msg import AgentLocation
 
 import tf
 from tf.transformations import euler_from_quaternion
@@ -188,6 +189,10 @@ class Detector:
         self.depth_sub = message_filters.Subscriber('/camera/depth/image_raw', Image)
         self.ts = message_filters.ApproximateTimeSynchronizer([self.rbg_sub, self.depth_sub], 1, 0.1)
         self.ts.registerCallback(self.unifiedCallback)
+
+        # Subscribe to other agent locations
+        self.agent_location_subscriber = rospy.Subscriber('/agent_location', AgentLocation, self.agent_location_callback, queue_size=10)
+        self.other_agent_locs = dict()
 
         # Subscribe to the labeled unknown objects
         self.labeled_sub = rospy.Subscriber("/labeled_unknown_objects", LabeledObjectArray, self.labeled_callback, queue_size=3)
@@ -438,6 +443,21 @@ class Detector:
                 image_with_boxes = cv2.putText(image_with_boxes, 'Overlapped', (x1, y1+30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
                 is_overlapped = True
 
+            # Now check if object might be the same as the robot:
+            skip_object = False
+            if self.other_agent_locs:
+                for agent_id in list(self.other_agent_locs.keys()):
+                    agent_x = self.other_agent_locs[agent_id][0]
+                    agent_y = self.other_agent_locs[agent_id][1]
+
+                    # Check if the object is within 1 meter of the agent's position
+                    dist_to_agent = np.sqrt((x_map - agent_x)**2 + (y_map - agent_y)**2)
+                    if dist_to_agent < 1:
+                        # Skip this object since it is likely the robot
+                        skip_object = True
+            if skip_object:
+                continue  # Skip this object since it is likely the robot
+
             # Add the object to the data dictionary
             object_dict = {}
             object_dict['class_name'] = class_name
@@ -628,6 +648,16 @@ class Detector:
         else:
             self.is_static = False
             self.queried_while_static = False
+
+    def agent_location_callback(self, msg):
+        """
+        Callback function for processing agent location messages.
+        This function is triggered when a new agent location message is received.
+        It updates the `other_agent_locs` dictionary with the agent's ID and its corresponding position.
+        Args:
+            msg (mattbot_dds.msg.AgentLocation): The agent location message containing the agent's ID and position.
+        """
+        self.other_agent_locs[msg.agentID.data] = (msg.pose.position.x, msg.pose.position.y)
 
 
     def run(self):
