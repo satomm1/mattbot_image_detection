@@ -3,3 +3,4 @@
 person*.txt
 *.pth
 !obama.jpg
+*.pyc
