@@ -3,7 +3,7 @@
 
   <arg name="weights_file" default="$(find mattbot_image_detection)/weights/cone.pt"/>
 
-  <!-- Launch the navigator.py script -->
+  <!-- Cone detection -->
   <node name="image_detector_node" pkg="mattbot_image_detection" type="detect_cone.py" output="log">
     <param name="weights_file" value="$(arg weights_file)" />
   </node>
