@@ -61,8 +61,8 @@ class GeminiBridge:
     def object_callback(self, msg):
 
         # For testing only, only process 1 image --- remove later
-        if self.done:
-            return
+        # if self.done:
+        #     return
 
         # If message is from too long ago, return
         if rospy.Time.now() - msg.header.stamp > rospy.Duration(2):
