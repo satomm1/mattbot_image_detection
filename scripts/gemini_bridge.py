@@ -64,7 +64,6 @@ class GeminiBridge:
 
         # If message is from too long ago, return
         if rospy.Time.now() - msg.header.stamp > rospy.Duration(2):
-            print("Message too old")
             return
         
         # Save msg.data as an image
@@ -104,7 +103,7 @@ class GeminiBridge:
             try:
                 response = requests.post(self.server, json=data)
             except:
-                # print("Error sending image to the LLM")
+                print("Error sending image to the LLM")
                 return
             response = response.json()['response']
             response = json.loads(response)
