@@ -4,3 +4,4 @@ person*.txt
 *.pth
 !obama.jpg
 *.pyc
+scripts/face_encodings.pkl
