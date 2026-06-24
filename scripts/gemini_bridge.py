@@ -46,6 +46,8 @@ class GeminiBridge:
         
         # The server to send the images to (Hosts the LLM API)
         self.server = server
+        self.use_llm_for_images = rospy.get_param('~use_llm_for_images', False)
+        rospy.loginfo("LLM image labeling %s", "enabled" if self.use_llm_for_images else "disabled")
 
         # Publisher for providing names of unknown objects
         self.labeled_pub = rospy.Publisher("/labeled_unknown_objects", LabeledObjectArray, queue_size=1)
@@ -91,7 +93,7 @@ class GeminiBridge:
             color = COLOR_CODES[GEMINI_COLORS.index(obj.color)]
             cv2.rectangle(img_with_boxes, (x1, y1), (x2, y2), color, 2)
 
-        if num_unknowns > 0:
+        if num_unknowns > 0 and self.use_llm_for_images:
             # Now save to the file
             cv2.imwrite("unknown_object.jpg", img_with_boxes)
             shutil.copyfile("unknown_object.jpg", f'../../../../../gemini_code/unknown_object.jpg')

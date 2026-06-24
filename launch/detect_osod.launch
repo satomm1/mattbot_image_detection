@@ -10,6 +10,7 @@
   <arg name="root_dir" default="$(find mattbot_image_detection)/src/mobileclip"/>
 
   <arg name="save_dir" default="$(find mattbot_image_detection)/images/"/>
+  <arg name="use_llm_for_images" default="false"/>
 
   <!-- Launch the object detection script -->
   <node name="image_detector_node" pkg="mattbot_image_detection" type="detect_osod.py" output="screen">
@@ -21,7 +22,9 @@
   </node>
 
   <!-- Launch the gemini bridge -->
-  <node name="gemini_bridge" pkg="mattbot_image_detection" type="gemini_bridge.py" output="screen" />
+  <node name="gemini_bridge" pkg="mattbot_image_detection" type="gemini_bridge.py" output="screen">
+    <param name="use_llm_for_images" value="$(arg use_llm_for_images)" />
+  </node>
 
   <!-- Launch the image saver -->
   <!-- <node name="image_saver" pkg="mattbot_image_detection" type="image_saver.py" output="screen">
