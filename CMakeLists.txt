@@ -171,6 +171,7 @@ include_directories(
 ## Mark executable scripts (Python etc.) for installation
 ## in contrast to setup.py, you can choose the destination
 catkin_install_python(PROGRAMS
+  scripts/observation_evaluator.py
   scripts/detect_coco.py
   scripts/detect_cone.py
   scripts/detect_cone_with_dist.py

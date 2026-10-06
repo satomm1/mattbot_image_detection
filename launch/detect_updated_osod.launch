@@ -12,6 +12,11 @@
   <arg name="save_dir" default="$(find mattbot_image_detection)/images/"/>
   <arg name="use_llm_for_images" default="false"/>
 
+  <!-- Experimental: decide whether checked ledger objects are still there (bringup observe:=true) -->
+  <arg name="observe_evaluate" default="false"/>
+  <arg name="observe_use_depth" default="true"/>
+  <arg name="observe_min_absent_frames" default="8"/>
+
   <!-- Launch the object detection script -->
   <node name="image_detector_node" pkg="mattbot_image_detection" type="detect_with_dist_osod.py" output="screen">
     <param name="tall" value="$(arg tall)" />
@@ -19,6 +24,12 @@
     <param name="labels_file" value="$(arg labels_file)" />
     <param name="clip_model" value="$(arg clip_model)" />
     <param name="root_dir" value="$(arg root_dir)" />
+  </node>
+
+  <node if="$(arg observe_evaluate)" name="observation_evaluator" pkg="mattbot_image_detection" type="observation_evaluator.py" output="screen">
+    <param name="tall" value="$(arg tall)" />
+    <param name="use_depth" value="$(arg observe_use_depth)" />
+    <param name="min_absent_frames" value="$(arg observe_min_absent_frames)" />
   </node>
 
   <!-- Launch the gemini bridge -->
