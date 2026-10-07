@@ -18,7 +18,6 @@ The per-frame and per-window logic is in observation_eval/evidence.py.
 
 import math
 import threading
-import time
 from dataclasses import fields
 
 import numpy as np
@@ -60,13 +59,13 @@ class ObservationEvaluatorNode:
         self.tall = bool(rospy.get_param("~tall", False))  # images rotated 180 deg, as in the detector
         self.depth_max_age_s = float(rospy.get_param("~depth_max_age_s", 0.5))
         self.resight_min_interval_s = float(rospy.get_param("~resight_min_interval_s", 30.0))
-        self.last_resight = {}  # object_id -> wall time of the last re-sighting we sent
+        self.last_resight = {}  # object_id -> ROS time of the last re-sighting we sent
 
         self.lock = threading.Lock()
         self.windows = {}  # object_id -> {"target", "start", "frames", "params", "others"}
         self.objects = {}  # object_id -> (class_name, x, y, width) from /object_beliefs (local frame)
         self.intrinsics = None
-        self.depth = None  # (wall time, HxW metres)
+        self.depth = None  # (ROS time, HxW metres)
         self.blocking = None
         self.map_info = None
         self.last_lost = -math.inf
@@ -109,7 +108,7 @@ class ObservationEvaluatorNode:
 
     def lost_callback(self, msg):
         if msg.data:
-            self.last_lost = time.time()
+            self.last_lost = rospy.get_time()
 
     def depth_callback(self, msg):
         with self.lock:
@@ -125,7 +124,7 @@ class ObservationEvaluatorNode:
         if self.tall:
             depth = depth[::-1, ::-1]
         with self.lock:
-            self.depth = (time.time(), depth)
+            self.depth = (rospy.get_time(), depth)
 
     # ---------- Windows ----------
 
@@ -138,7 +137,7 @@ class ObservationEvaluatorNode:
                     params = EvalParams(**{**params.__dict__, "match_any_class": True})
                 self.windows[msg.object_id] = {
                     "target": Target(class_name, msg.target_x, msg.target_y, width),
-                    "start": msg.window_start or time.time(),
+                    "start": msg.window_start or rospy.get_time(),
                     "frames": [],
                     "params": params,
                     "others": {},  # other known object_id -> [(x, y, width) per matching detection, frame count]
@@ -147,7 +146,7 @@ class ObservationEvaluatorNode:
             window = self.windows.pop(msg.object_id, None)
         if window is None or msg.event != ObservationEvent.ENDED:
             return  # ABORTED, or a window we did not see start
-        self.decide(msg.object_id, window, msg.window_end or time.time())
+        self.decide(msg.object_id, window, msg.window_end or rospy.get_time())
 
     def camera_pose(self):
         try:
@@ -165,7 +164,7 @@ class ObservationEvaluatorNode:
         if cam is None:
             return
         dets = [Detection(o.class_name, o.pose.position.x, o.pose.position.y, o.width) for o in msg.objects]
-        now = time.time()
+        now = rospy.get_time()
         with self.lock:
             depth = None
             if self.depth is not None and now - self.depth[0] <= self.depth_max_age_s:
@@ -216,7 +215,7 @@ class ObservationEvaluatorNode:
         out = window_outcome(frames, params)
 
         if out.outcome == OUTCOME_PRESENT:
-            self.last_resight[object_id] = time.time()
+            self.last_resight[object_id] = rospy.get_time()
             matches = [m for f in frames for m in f.matches]
             self.confirm_pub.publish(self.object_msg(
                 target.class_name,
@@ -265,7 +264,7 @@ class ObservationEvaluatorNode:
     def resight_others(self, window, params):
         """Send re-sightings for other known objects detected in enough frames of the window."""
         sent = []
-        now = time.time()
+        now = rospy.get_time()
         for oid, (matches, n_frames) in sorted(window["others"].items()):
             if n_frames < params.min_present_frames:
                 continue
