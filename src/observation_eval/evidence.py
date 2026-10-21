@@ -8,9 +8,10 @@ Each detector frame gets a verdict:
   ABSENT     no such detection, the object is in view, nothing occludes it, and the depth
              check (if enabled) agrees
   UNCERTAIN  occluded, out of view / range, localization lost, or depth inconclusive
-Occluders: any detection (not only people) or known ledger object standing between the camera
-and the object, or depth pixels reading clearly nearer than the object. A hidden object is
-"occluded", never "gone".
+Occluders: the static map (the caller's map_visible: most of the object hidden by walls from the
+camera's actual pose, e.g. a robot that stopped short of its viewpoint beside a wall corner), any
+detection (not only people) or known ledger object standing between the camera and the object, or
+depth pixels reading clearly nearer than the object. A hidden object is "occluded", never "gone".
 A window is PRESENT / ABSENT / INCONCLUSIVE from the counts of frame verdicts.
 
 Depth check (optional). The image region where the object should appear is compared with the
@@ -270,10 +271,13 @@ def frame_verdict(
     background_m: float = math.inf,
     localization_ok: bool = True,
     known_blockers=(),
+    map_visible: bool = True,
 ):
     """Evidence from one detector frame. background_m: static-map distance from the camera to the
     first wall along the bearing to the object (inf if none within range). known_blockers: other
-    active ledger objects [(x, y, width), ...]."""
+    active ledger objects [(x, y, width), ...]. map_visible: False if the static map hides most of
+    the object from the camera (the observation planner's viewpoint rule,
+    navigation_utils.viewpoints.width_line_of_sight_counts >= LOS_MIN_CLEAR)."""
     matches = match_detections(detections, target, params)
     if matches:
         return FrameEvidence(PRESENT, "match", matches)
@@ -282,6 +286,8 @@ def frame_verdict(
     angle, rng = bearing(cam, (target.x, target.y))
     if not in_view(angle, rng, intr, params):
         return FrameEvidence(UNCERTAIN, "out_of_view", [])
+    if not map_visible:
+        return FrameEvidence(UNCERTAIN, "map_occluded", [])
     if occluded(detections, cam, target, params):
         return FrameEvidence(UNCERTAIN, "occluded", [])
     if known_occluded(known_blockers, cam, target, params):

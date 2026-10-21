@@ -45,6 +45,11 @@ from observation_eval.evidence import (
     window_outcome,
 )
 
+try:  # the observation planner's line-of-sight rule (mattbot_navigation), for the static-map occlusion check
+    from navigation_utils.viewpoints import LOS_MIN_CLEAR, width_line_of_sight_counts
+except ImportError:  # pragma: no cover
+    LOS_MIN_CLEAR, width_line_of_sight_counts = None, None
+
 LOST_LOCALIZATION_HOLD_S = 2.0  # frames this soon after /lost_localization are UNCERTAIN
 
 
@@ -180,6 +185,7 @@ class ObservationEvaluatorNode:
                     localization_ok=now - self.last_lost > LOST_LOCALIZATION_HOLD_S
                     and self.last_lost < window["start"],
                     known_blockers=[(x, y, w) for _c, x, y, w in others.values()],
+                    map_visible=self.map_visible(cam, target),
                 )
                 window["frames"].append(ev)
                 # Other known objects seen in this frame (positive evidence only)
@@ -195,6 +201,17 @@ class ObservationEvaluatorNode:
             return intr
         sx, sy = depth.shape[1] / intr.width, depth.shape[0] / intr.height
         return Intrinsics(intr.fx * sx, intr.fy * sy, intr.cx * sx, intr.cy * sy, depth.shape[1], depth.shape[0])
+
+    def map_visible(self, cam, target):
+        """False if the static map hides most of the target from the camera (the viewpoint rule)."""
+        if self.blocking is None or width_line_of_sight_counts is None:
+            return True
+        info = self.map_info
+        clear = width_line_of_sight_counts(
+            self.blocking, (info.origin.position.x, info.origin.position.y), info.resolution,
+            np.array([cam.x]), np.array([cam.y]), target.x, target.y, target.width / 2.0,
+        )[0]
+        return int(clear) >= LOS_MIN_CLEAR
 
     def background(self, cam, target, params):
         """Static-map distance from the camera to the first wall along the bearing to the object."""

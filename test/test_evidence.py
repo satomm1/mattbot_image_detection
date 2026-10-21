@@ -192,3 +192,13 @@ def test_match_known_groups_by_nearest_object():
             Detection("chair", 1.0, 1.0, 0.5)]
     out = match_known(dets, known, P)
     assert out == {"b": [(1.1, 1.0, 0.4)], "c": [(1.5, 1.0, 0.4)], "d": [(2.9, 3.0, 0.3)]}
+
+
+def test_static_map_occlusion_is_uncertain_not_absent():
+    """A robot off its viewpoint beside a wall corner: the map hides the object, so no frame says ABSENT."""
+    vision = EvalParams(use_depth=False)
+    ev = frame_verdict([], CHAIR, CAM, INTR, vision, map_visible=False)
+    assert ev.verdict == UNCERTAIN and ev.reason == "map_occluded"
+    assert frame_verdict([], CHAIR, CAM, INTR, vision).verdict == ABSENT  # map_visible defaults to True
+    seen = frame_verdict([Detection("chair", 2.05, 0.0, 0.5)], CHAIR, CAM, INTR, vision, map_visible=False)
+    assert seen.verdict == PRESENT  # a detection still counts (the map can be wrong about walls)
