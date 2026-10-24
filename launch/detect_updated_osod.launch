@@ -12,6 +12,13 @@
   <arg name="save_dir" default="$(find mattbot_image_detection)/images/"/>
   <arg name="use_llm_for_images" default="false"/>
 
+  <!-- Display options for /camera/color/image_with_boxes, and turning gate for processing frames -->
+  <arg name="display_min_conf" default="0.5"/>
+  <arg name="display_depth" default="true"/>
+  <arg name="display_overlapped" default="false"/>
+  <arg name="turning_threshold" default="0.10"/>
+  <arg name="turning_cooldown" default="0.15"/>
+
   <!-- Experimental: decide whether checked ledger objects are still there (bringup observe:=true) -->
   <arg name="observe_evaluate" default="false"/>
   <arg name="observe_use_depth" default="true"/>
@@ -24,6 +31,11 @@
     <param name="labels_file" value="$(arg labels_file)" />
     <param name="clip_model" value="$(arg clip_model)" />
     <param name="root_dir" value="$(arg root_dir)" />
+    <param name="display_min_conf" value="$(arg display_min_conf)" />
+    <param name="display_depth" value="$(arg display_depth)" />
+    <param name="display_overlapped" value="$(arg display_overlapped)" />
+    <param name="turning_threshold" value="$(arg turning_threshold)" />
+    <param name="turning_cooldown" value="$(arg turning_cooldown)" />
   </node>
 
   <node if="$(arg observe_evaluate)" name="observation_evaluator" pkg="mattbot_image_detection" type="observation_evaluator.py" output="screen">

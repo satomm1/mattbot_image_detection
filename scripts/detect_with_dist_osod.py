@@ -24,6 +24,21 @@ KNOWN_OBJECT_THRESHOLD = 0.6
 UNKNOWN_OBJECT_THRESHOLD = 0.25
 
 IOU_THRESHOLD = 0.1  # Set the IoU threshold for NMS
+
+LABEL_FONT_SCALE = 0.75
+LABEL_THICKNESS = 2
+LABEL_HEIGHT = cv2.getTextSize("Ag", cv2.FONT_HERSHEY_SIMPLEX, LABEL_FONT_SCALE, LABEL_THICKNESS)[0][1]
+
+def label_inside_box(y1):
+    """True if a label drawn above the box at y1 would be cut off by the top of the image."""
+    return y1 - 10 - LABEL_HEIGHT < 0
+
+def draw_label(image, text, x1, y1, color):
+    """Draw text above the box, or just inside its top edge when it would be cut off. Keeps it within the image width."""
+    text_width = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, LABEL_FONT_SCALE, LABEL_THICKNESS)[0][0]
+    x = max(0, min(x1, image.shape[1] - text_width))
+    y = y1 + LABEL_HEIGHT + 5 if label_inside_box(y1) else y1 - 10
+    cv2.putText(image, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, LABEL_FONT_SCALE, color, LABEL_THICKNESS)
 COLORS = [(255,50,50), (207,49,225), (114,15,191), (22,0,222), (0,177,122), (34,236,169),
           (34,236,81), (203,203,47), (205,90,23), (102,68,16), (168,215,141), (185,167,215)]
 
@@ -139,8 +154,15 @@ class Detector:
 
         self.tall = rospy.get_param('~tall', False)  # True if camera mounted on tall robot (i.e. upside down)
 
-        # These keep track of whether the robot is turning or not, 
+        # Display options for /camera/color/image_with_boxes (do not affect the published detections)
+        self.display_min_conf = rospy.get_param('~display_min_conf', 0.0)  # Only draw objects with at least this confidence
+        self.display_depth = rospy.get_param('~display_depth', True)  # Write the estimated depth on each box
+        self.display_overlapped = rospy.get_param('~display_overlapped', False)  # Write "Overlapped" on boxes that overlap the map
+
+        # These keep track of whether the robot is turning or not,
         # The depth images produced when turning are not reliable, so we need to ignore them
+        self.turning_threshold = rospy.get_param('~turning_threshold', 0.15)  # |angular.z| (rad/s) above which the robot is turning
+        self.turning_cooldown = rospy.get_param('~turning_cooldown', 0.25)  # Keep ignoring frames this long after a turn (s)
         self.is_turning = False
         self.time_since_turning = 0
 
@@ -268,21 +290,25 @@ class Detector:
             # Draw box and label on the image
             box = boxes[i]
             x1, y1, x2, y2 = int(box[0]), int(box[1]), int(box[2]), int(box[3])
-            cv2.rectangle(image_with_boxes, (x1, y1), (x2, y2), COLORS[clss[i]], 2)
+            draw = conf[i] >= self.display_min_conf
+            if draw:
+                cv2.rectangle(image_with_boxes, (x1, y1), (x2, y2), COLORS[clss[i]], 2)
 
             if clss[i] != 0:
-                cv2.putText(image_with_boxes, f"{self.labels[clss[i]]} {conf[i]:.2f}", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.75, COLORS[clss[i]], 2)
+                if draw:
+                    draw_label(image_with_boxes, f"{self.labels[clss[i]]} {conf[i]:.2f}", x1, y1, COLORS[clss[i]])
             else:
                 clip_name = self.clip_classify(image[y1:y2, x1:x2])
                 if clip_name != 'unknown':
                     # If the object is known, draw the label on the image
-                    cv2.putText(image_with_boxes, f"CLIP: {clip_name}", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.75, COLORS[clss[i]], 2)
+                    if draw:
+                        draw_label(image_with_boxes, f"CLIP: {clip_name}", x1, y1, COLORS[clss[i]])
                     # Change clss[i] to not be 0 so that it is considered a known object
                     clss[i] = -1
                     clip_names[i] = clip_name
-                else: 
+                elif draw:
                     # CLIP didn't classify the object, so it is unknown
-                    cv2.putText(image_with_boxes, f"{self.labels[clss[i]]} {conf[i]:.2f}", (x1, y1-10), cv2.FONT_HERSHEY_SIMPLEX, 0.75, COLORS[clss[i]], 2)
+                    draw_label(image_with_boxes, f"{self.labels[clss[i]]} {conf[i]:.2f}", x1, y1, COLORS[clss[i]])
 
             # Note: we don't draw on the image_with_unknown_boxes because we are going to filter them first, only objects which don't intersect with 
             # the map or objects we haven't seen before will be added.
@@ -397,7 +423,10 @@ class Detector:
             estimated_depth = self.get_depth(x1, y1, x2, y2, depth)
 
             # Write the estimated depth on the image
-            image_with_boxes = cv2.putText(image_with_boxes, 'Depth: {:.2f} m'.format(estimated_depth), (x1, y1+15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
+            draw = class_score >= self.display_min_conf
+            text_offset = LABEL_HEIGHT + 10 if label_inside_box(y1) else 0  # Move below the label if it is inside the box
+            if draw and self.display_depth:
+                image_with_boxes = cv2.putText(image_with_boxes, 'Depth: {:.2f} m'.format(estimated_depth), (x1, y1+15+text_offset),cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
 
             # Skip objects with invalid depth values (0) or too far away (> 5 meters) since they are unreliable
             if estimated_depth == 0 or estimated_depth > 5:
@@ -440,7 +469,8 @@ class Detector:
 
             is_overlapped = False
             if self.map.is_overlapped(x_map, y_map, object_width, object_height):
-                image_with_boxes = cv2.putText(image_with_boxes, 'Overlapped', (x1, y1+30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
+                if draw and self.display_overlapped:
+                    image_with_boxes = cv2.putText(image_with_boxes, 'Overlapped', (x1, y1+30+text_offset),cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
                 is_overlapped = True
 
             # Now check if object might be the same as the robot:
@@ -624,17 +654,17 @@ class Detector:
         Callback function for processing velocity command messages.
         This function is triggered when a new velocity command message is received.
         It updates the `is_turning` attribute based on the angular velocity of the message.
-        If the absolute value of the angular velocity (`msg.angular.z`) is greater than 0.07,
+        If the absolute value of the angular velocity (`msg.angular.z`) is greater than `turning_threshold`,
         it sets `is_turning` to True and updates `time_since_turning` to the current time.
-        If the time elapsed since the last turn is less than 0.25 seconds, it keeps `is_turning` as True.
+        If the time elapsed since the last turn is less than `turning_cooldown` seconds, it keeps `is_turning` as True.
         Otherwise, it sets `is_turning` to False.
         Args:
             msg (geometry_msgs.msg.Twist): The velocity command message containing linear and angular velocities.
         """
-        if np.abs(msg.angular.z) > 0.15:
+        if np.abs(msg.angular.z) > self.turning_threshold:
             self.is_turning = True
             self.time_since_turning = time.time()
-        elif time.time() - self.time_since_turning < 0.25:
+        elif time.time() - self.time_since_turning < self.turning_cooldown:
             self.is_turning = True
         else:
             self.is_turning = False
