@@ -5,3 +5,4 @@ person*.txt
 !obama.jpg
 *.pyc
 scripts/face_encodings.pkl
+bag_recordings/
