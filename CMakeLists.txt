@@ -61,6 +61,8 @@ add_message_files(
   FaceEncoding.msg
   LabeledObject.msg
   LabeledObjectArray.msg
+  TrackedPerson.msg
+  TrackedPersonArray.msg
 )
 
 ## Generate services in the 'srv' folder
@@ -181,6 +183,7 @@ catkin_install_python(PROGRAMS
   scripts/detect_cone_person_other_with_dist_short.py
   scripts/detect_cone_person_other_with_dist_tall.py
   scripts/person_tracker.py
+  scripts/people_tracker_node.py
   scripts/sort.py
   scripts/face_detection.py
   scripts/detect_osod.py

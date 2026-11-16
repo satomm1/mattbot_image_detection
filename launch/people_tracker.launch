@@ -1,0 +1,17 @@
+<launch>
+  <!-- Map-frame people tracker: /detected_objects (person) -> /tracked_people (TrackedPersonArray, with velocity).
+       Used by the learned local planner (q_local_planner obstacle_source: tracked_people). -->
+  <arg name="detections_topic" default="/detected_objects"/>
+  <!-- meas_std: about 0.15 m for the detector's camera depth estimate -->
+  <arg name="meas_std" default="0.15" doc="detector position noise, m (1 sigma)"/>
+  <arg name="accel_std" default="1.0" doc="process noise: how hard people change velocity, m/s^2"/>
+  <arg name="max_coast_s" default="1.0" doc="delete a track not detected for this long, s"/>
+
+  <node name="people_tracker" pkg="mattbot_image_detection" type="people_tracker_node.py" output="screen">
+    <param name="detections_topic" value="$(arg detections_topic)"/>
+    <param name="meas_std" value="$(arg meas_std)"/>
+    <param name="accel_std" value="$(arg accel_std)"/>
+    <param name="max_coast_s" value="$(arg max_coast_s)"/>
+    <rosparam param="classes">[person]</rosparam>
+  </node>
+</launch>

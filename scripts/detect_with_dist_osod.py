@@ -250,9 +250,18 @@ class Detector:
 
         start_time = time.time()
 
+        # The time the image was taken: detections are stamped with it, and the camera pose is looked up
+        # at it, so a tracker downstream (people_tracker_node) can estimate velocities and compensate for
+        # the inference latency. Falls back to the latest transform (the old behaviour) if TF lacks that time.
+        image_stamp = rgb_data.header.stamp if rgb_data.header.stamp.to_sec() > 0.0 else rospy.Time.now()
+
         # Get the transform from map to camera_link
         try:
-            (trans, rot) = self.tf_listener.lookupTransform("/map", "/camera_link", rospy.Time(0))
+            try:
+                self.tf_listener.waitForTransform("/map", "/camera_link", image_stamp, rospy.Duration(0.05))
+                (trans, rot) = self.tf_listener.lookupTransform("/map", "/camera_link", image_stamp)
+            except (tf.Exception, tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
+                (trans, rot) = self.tf_listener.lookupTransform("/map", "/camera_link", rospy.Time(0))
         except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
             return
 
@@ -315,7 +324,7 @@ class Detector:
 
         # Create the DetectedObjectArray message for storing known detected objects
         detection_array = DetectedObjectArray()
-        detection_array.header.stamp = rospy.Time.now()
+        detection_array.header.stamp = image_stamp  # image time, not after inference
         detection_array.header.frame_id = 'map'
         detection_array.objects = []
 
