@@ -2,7 +2,9 @@
   <!-- Map-frame people tracker: /detected_objects (person) -> /tracked_people (TrackedPersonArray, with velocity).
        Used by the learned local planner (q_local_planner obstacle_source: tracked_people). -->
   <arg name="detections_topic" default="/detected_objects"/>
-  <!-- meas_std: about 0.15 m for the detector's camera depth estimate -->
+  <!-- meas_std: about 0.15 m for camera depth. With the detector's person_range_source:=lidar people are placed
+       to a few centimetres, so a lower value (e.g. 0.07) lets velocities settle faster; check the
+       /detected_objects_range_debug calibration first. -->
   <arg name="meas_std" default="0.15" doc="detector position noise, m (1 sigma)"/>
   <arg name="accel_std" default="1.0" doc="process noise: how hard people change velocity, m/s^2"/>
   <arg name="max_coast_s" default="1.0" doc="delete a track not detected for this long, s"/>

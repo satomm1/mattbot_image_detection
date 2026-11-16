@@ -19,6 +19,14 @@
   <arg name="turning_threshold" default="0.10"/>
   <arg name="turning_cooldown" default="0.15"/>
 
+  <!-- How detections are placed (object_ranging). Defaults: robust depth, LiDAR for people.
+       range_method: robust (nearest substantial surface in a central/torso window, corrected centre) | legacy (the original estimate)
+       person_range_source: lidar (people ranged by the /scan cluster in the box's bearing span, camera fallback) | camera
+       publish_range_debug: every method's estimate side by side on /detected_objects_range_debug (JSON) -->
+  <arg name="range_method" default="robust"/>
+  <arg name="person_range_source" default="lidar"/>
+  <arg name="publish_range_debug" default="false"/>
+
   <!-- Experimental: decide whether checked ledger objects are still there (bringup observe:=true) -->
   <arg name="observe_evaluate" default="false"/>
   <arg name="observe_use_depth" default="true"/>
@@ -36,6 +44,9 @@
     <param name="display_overlapped" value="$(arg display_overlapped)" />
     <param name="turning_threshold" value="$(arg turning_threshold)" />
     <param name="turning_cooldown" value="$(arg turning_cooldown)" />
+    <param name="range_method" value="$(arg range_method)" />
+    <param name="person_range_source" value="$(arg person_range_source)" />
+    <param name="publish_range_debug" value="$(arg publish_range_debug)" />
   </node>
 
   <node if="$(arg observe_evaluate)" name="observation_evaluator" pkg="mattbot_image_detection" type="observation_evaluator.py" output="screen">

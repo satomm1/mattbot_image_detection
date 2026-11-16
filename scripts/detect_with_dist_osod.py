@@ -1,5 +1,6 @@
 import rospy
-from sensor_msgs.msg import Image, CameraInfo, PointCloud2
+from sensor_msgs.msg import Image, CameraInfo, PointCloud2, LaserScan
+from std_msgs.msg import String
 from geometry_msgs.msg import PoseWithCovariance, Pose, Twist
 from mattbot_image_detection.msg import DetectedObject, DetectedObjectArray, DetectedObjectWithImage, DetectedObjectWithImageArray
 from mattbot_image_detection.msg import LabeledObject, LabeledObjectArray
@@ -18,7 +19,16 @@ import mobileclip
 from ultralytics import YOLO
 import numpy as np
 import cv2
+import json
+import math
 import time
+
+from object_ranging import (OBJECT_WINDOW, PERSON_WINDOW, bbox_percentile_depth, box_width_height, effective_cx,
+                            legacy_position, pixel_bearing, range_in_bearing_span, ray_point, scan_points_map,
+                            surface_position, window_cluster_depth)
+
+RANGE_METHODS = ("legacy", "robust")
+PERSON_RANGE_SOURCES = ("camera", "lidar")
 
 KNOWN_OBJECT_THRESHOLD = 0.6
 UNKNOWN_OBJECT_THRESHOLD = 0.25
@@ -159,6 +169,36 @@ class Detector:
         self.display_depth = rospy.get_param('~display_depth', True)  # Write the estimated depth on each box
         self.display_overlapped = rospy.get_param('~display_overlapped', False)  # Write "Overlapped" on boxes that overlap the map
 
+        # How detections are placed (object_ranging). The defaults reproduce the original estimate exactly.
+        #   range_method: legacy = 25th percentile of the box's depth, centre ~0.4 m behind a person's surface;
+        #                 robust = nearest substantial surface in a central (torso) window, centre one body
+        #                 half-depth behind it.
+        #   person_range_source: camera, or lidar = people ranged by the /scan cluster inside the box's
+        #                 bearing span (camera estimate as the fallback; works < 0.6 m and > 5 m).
+        self.range_method = rospy.get_param('~range_method', 'legacy')
+        self.person_range_source = rospy.get_param('~person_range_source', 'camera')
+        if self.range_method not in RANGE_METHODS:
+            rospy.logwarn("Unknown ~range_method %r, using legacy (choices: %s)", self.range_method, RANGE_METHODS)
+            self.range_method = 'legacy'
+        if self.person_range_source not in PERSON_RANGE_SOURCES:
+            rospy.logwarn("Unknown ~person_range_source %r, using camera (choices: %s)", self.person_range_source,
+                          PERSON_RANGE_SOURCES)
+            self.person_range_source = 'camera'
+        self.person_centre_offset = rospy.get_param('~person_centre_offset', 0.15)  # m behind the torso surface
+        self.lidar_centre_offset = rospy.get_param('~lidar_centre_offset', 0.10)    # m behind the scan returns
+        self.lidar_max_range = rospy.get_param('~lidar_max_range', 8.0)             # m (people ranged by LiDAR)
+        self.lidar_max_scan_age = rospy.get_param('~lidar_max_scan_age', 0.3)       # s between scan and image
+        self.lidar_margin = rospy.get_param('~lidar_margin', 0.15)                  # box span shrink per side
+        self.publish_range_debug = rospy.get_param('~publish_range_debug', False)
+        self.latest_scan = None  # (stamp, frame_id, ranges, angles, range_min, range_max), swapped atomically
+        self.current_image_stamp = rospy.Time(0)
+        if self.person_range_source == 'lidar':
+            rospy.Subscriber(rospy.get_param('~scan_topic', '/scan'), LaserScan, self.scan_callback, queue_size=1)
+        self.range_debug_publisher = (rospy.Publisher('/detected_objects_range_debug', String, queue_size=5)
+                                      if self.publish_range_debug else None)
+        rospy.loginfo("Object ranging: range_method=%s person_range_source=%s%s", self.range_method,
+                      self.person_range_source, " (debug on)" if self.publish_range_debug else "")
+
         # These keep track of whether the robot is turning or not,
         # The depth images produced when turning are not reliable, so we need to ignore them
         self.turning_threshold = rospy.get_param('~turning_threshold', 0.15)  # |angular.z| (rad/s) above which the robot is turning
@@ -254,6 +294,7 @@ class Detector:
         # at it, so a tracker downstream (people_tracker_node) can estimate velocities and compensate for
         # the inference latency. Falls back to the latest transform (the old behaviour) if TF lacks that time.
         image_stamp = rgb_data.header.stamp if rgb_data.header.stamp.to_sec() > 0.0 else rospy.Time.now()
+        self.current_image_stamp = image_stamp
 
         # Get the transform from map to camera_link
         try:
@@ -400,6 +441,12 @@ class Detector:
         y_camera = trans[1]
         _, _, theta_camera = euler_from_quaternion(rot)
         theta_camera = theta_camera
+
+        # Ranging inputs for the non-legacy options: the principal point in the (possibly rotated) image
+        # the boxes are in, and this frame's LiDAR returns in the map frame
+        cx_eff = effective_cx(self.cx, depth.shape[1], self.tall)
+        scan_pts = self._scan_points() if self.person_range_source == 'lidar' else None
+        range_debug = []
         
         num_unknown = 0
         for i in range(num_detected):
@@ -429,16 +476,40 @@ class Detector:
             y_center = (y1 + y2) / 2
 
             # Get the estimated depth of the object (in meters)
-            estimated_depth = self.get_depth(x1, y1, x2, y2, depth)
+            is_person = class_name == 'person'
+            if self.range_method == 'robust':
+                estimated_depth = window_cluster_depth(depth, x1, y1, x2, y2,
+                                                       window=PERSON_WINDOW if is_person else OBJECT_WINDOW)
+            else:
+                estimated_depth = self.get_depth(x1, y1, x2, y2, depth)
+
+            # People ranged by the LiDAR (its cluster, consistent with the camera depth when there is one)
+            lidar_hit = None
+            if is_person and self.person_range_source == 'lidar' and scan_pts is not None:
+                camera_ok = 0 < estimated_depth <= 5
+                lidar_hit = range_in_bearing_span(
+                    scan_pts, x_camera, y_camera, theta_camera,
+                    pixel_bearing(x2, cx_eff, self.fx), pixel_bearing(x1, cx_eff, self.fx),
+                    margin=self.lidar_margin, max_range=self.lidar_max_range,
+                    prefer_range=self._camera_range(x_center, estimated_depth, cx_eff) if camera_ok else None)
 
             # Write the estimated depth on the image
             draw = class_score >= self.display_min_conf
             text_offset = LABEL_HEIGHT + 10 if label_inside_box(y1) else 0  # Move below the label if it is inside the box
             if draw and self.display_depth:
-                image_with_boxes = cv2.putText(image_with_boxes, 'Depth: {:.2f} m'.format(estimated_depth), (x1, y1+15+text_offset),cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
+                depth_label = 'Depth: {:.2f} m'.format(estimated_depth)
+                if lidar_hit is not None:
+                    depth_label += '  L {:.2f} m'.format(lidar_hit[2])  # the LiDAR range used for this person
+                image_with_boxes = cv2.putText(image_with_boxes, depth_label, (x1, y1+15+text_offset),cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
+
+            if lidar_hit is not None:
+                # The LiDAR range replaces the camera depth (and its 0.6-5 m validity window) for this person
+                lidar_range = lidar_hit[2]
+                lidar_bearing = pixel_bearing(x_center, cx_eff, self.fx)
+                estimated_depth = lidar_range * math.cos(lidar_bearing)  # forward depth, for the width/height
 
             # Skip objects with invalid depth values (0) or too far away (> 5 meters) since they are unreliable
-            if estimated_depth == 0 or estimated_depth > 5:
+            if lidar_hit is None and (estimated_depth == 0 or estimated_depth > 5):
                 new_object = DetectedObjectWithImage()
                 new_object.class_name = class_name
                 new_object.probability = class_score
@@ -450,31 +521,29 @@ class Detector:
                 unknown_object_array.objects.append(new_object)
                 continue
 
-            # Get the object's position in the camera frame using the estimated depth
-            local_x_min = (x1 - self.cx) * estimated_depth / self.fx  # meters (left-most point)
-            local_z_min = (y1 - self.cy) * estimated_depth / self.fy  # meters (bottom-most point)
-            local_x_max = (x2 - self.cx) * estimated_depth / self.fx  # meters (right-most point)
-            local_z_max = (y2 - self.cy) * estimated_depth / self.fy  # meters (top-most point)
-            local_x_center = (x_center - self.cx) * estimated_depth / self.fx  # meters
-            local_z_center = (y_center - self.cy) * estimated_depth / self.fy  # meters
+            # The object's size at the depth used, and its position in the map frame
+            if self.range_method == 'legacy' and lidar_hit is None:
+                x_map, y_map, object_width, object_height = legacy_position(
+                    x_camera, y_camera, theta_camera, x1, y1, x2, y2, estimated_depth, self.cx, self.cy, self.fx, self.fy)
+                range_source = 'C'
+            else:
+                object_width, object_height = box_width_height(x1, y1, x2, y2, estimated_depth, self.fx, self.fy)
+                if lidar_hit is not None:
+                    x_map, y_map = ray_point(x_camera, y_camera, theta_camera, lidar_bearing,
+                                             lidar_range + self.lidar_centre_offset)
+                    range_source = 'L'
+                else:
+                    offset = self.person_centre_offset if is_person else 0.5 * min(object_width, object_height, 0.33)
+                    x_map, y_map, _ = surface_position(x_camera, y_camera, theta_camera, x_center, estimated_depth,
+                                                       cx_eff, self.fx, offset)
+                    range_source = 'C'
 
-            # Calculate the object's width and height
-            object_width = local_x_max - local_x_min
-            object_height = local_z_max - local_z_min
-            
             if object_height < 0.1 or object_width < 0.1:
                 continue  # Skip objects that are too small
 
-            # Choose the object depth (i.e. width in the direction of the camera) as the minimum of width, height, and 0.33 meters
-            object_depth = np.min([object_width, object_height, 0.33])
-            
-            # hypot is the distance from camera to object's 3D center
-            hypot = np.sqrt(local_x_center**2 + (estimated_depth + object_depth/2)**2)
-
-            # Calculate the object's position in the map frame
-            theta_object = np.arctan2(local_x_center, estimated_depth)
-            x_map = x_camera + (hypot + object_width/2) * np.cos(theta_camera - theta_object)  # Add object width/2 to get center of object (assume width=depth)
-            y_map = y_camera + (hypot + object_width/2) * np.sin(theta_camera - theta_object)
+            if self.range_debug_publisher is not None:
+                range_debug.append(self._range_debug(class_name, x1, y1, x2, y2, depth, x_camera, y_camera,
+                                                     theta_camera, cx_eff, scan_pts, range_source, x_map, y_map))
 
             is_overlapped = False
             if self.map.is_overlapped(x_map, y_map, object_width, object_height):
@@ -564,9 +633,76 @@ class Detector:
                 new_object.color = "none"
                 unknown_object_array.objects.append(new_object)
             
+        if self.range_debug_publisher is not None and range_debug:
+            self.range_debug_publisher.publish(String(data=json.dumps({
+                "stamp": self.current_image_stamp.to_sec(), "range_method": self.range_method,
+                "person_range_source": self.person_range_source, "camera": [x_camera, y_camera, theta_camera],
+                "detections": range_debug})))
+
         return data_dict, data_count, detection_array, unknown_object_array, image_with_boxes, unknown_image
 
-    def get_depth(self, x_min, y_min, x_max, y_max, depth):
+    # ------------------------------------------------------------------ ranging helpers (object_ranging)
+
+    def scan_callback(self, msg):
+        """Keep the latest scan as one immutable tuple (atomic swap: the YOLO callback runs in another thread)."""
+        n = len(msg.ranges)
+        angles = msg.angle_min + msg.angle_increment * np.arange(n)
+        self.latest_scan = (msg.header.stamp, msg.header.frame_id, np.asarray(msg.ranges, dtype=np.float64),
+                            angles, msg.range_min, msg.range_max)
+
+    def _scan_points(self):
+        """This frame's LiDAR returns in the map frame (placed with the robot pose at SCAN time), or None
+        when there is no scan within lidar_max_scan_age of the image."""
+        scan = self.latest_scan
+        if scan is None:
+            return None
+        stamp, frame, ranges, angles, rmin, rmax = scan
+        if abs((self.current_image_stamp - stamp).to_sec()) > self.lidar_max_scan_age:
+            return None
+        frame = frame.lstrip('/') or 'laser_frame'
+        try:
+            try:
+                (t, r) = self.tf_listener.lookupTransform('/map', frame, stamp)
+            except (tf.Exception, tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
+                (t, r) = self.tf_listener.lookupTransform('/map', frame, rospy.Time(0))
+        except (tf.Exception, tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
+            return None
+        return scan_points_map(ranges, angles, t[0], t[1], euler_from_quaternion(r)[2], rmin, rmax)
+
+    def _camera_range(self, u_center, depth_m, cx_eff):
+        """Range along the centre ray to the surface at forward depth ``depth_m``."""
+        return depth_m / math.cos(pixel_bearing(u_center, cx_eff, self.fx))
+
+    def _range_debug(self, class_name, x1, y1, x2, y2, depth, x_camera, y_camera, theta_camera, cx_eff, scan_pts,
+                     used, x_map, y_map):
+        """Every method's estimate side by side, for calibrating them against a tape measure."""
+        is_person = class_name == 'person'
+        u = (x1 + x2) / 2
+        d_legacy = bbox_percentile_depth(depth, x1, y1, x2, y2)
+        d_robust = window_cluster_depth(depth, x1, y1, x2, y2, window=PERSON_WINDOW if is_person else OBJECT_WINDOW)
+        out = {"class": class_name, "box": [x1, y1, x2, y2], "used": used, "range_method": self.range_method,
+               "position": [x_map, y_map]}
+        if d_legacy > 0:
+            lx, ly, _, _ = legacy_position(x_camera, y_camera, theta_camera, x1, y1, x2, y2, d_legacy,
+                                           self.cx, self.cy, self.fx, self.fy)
+            out["legacy"] = {"depth": d_legacy, "range": math.hypot(lx - x_camera, ly - y_camera), "xy": [lx, ly]}
+        if d_robust > 0:
+            w, h = box_width_height(x1, y1, x2, y2, d_robust, self.fx, self.fy)
+            off = self.person_centre_offset if is_person else 0.5 * min(w, h, 0.33)
+            rx, ry, rs = surface_position(x_camera, y_camera, theta_camera, u, d_robust, cx_eff, self.fx, off)
+            out["robust"] = {"depth": d_robust, "surface_range": rs, "range": math.hypot(rx - x_camera, ry - y_camera),
+                             "xy": [rx, ry]}
+        if is_person and scan_pts is not None:
+            hit = range_in_bearing_span(scan_pts, x_camera, y_camera, theta_camera,
+                                        pixel_bearing(x2, cx_eff, self.fx), pixel_bearing(x1, cx_eff, self.fx),
+                                        margin=self.lidar_margin, max_range=self.lidar_max_range,
+                                        prefer_range=self._camera_range(u, d_robust, cx_eff) if d_robust > 0 else None)
+            if hit is not None:
+                out["lidar"] = {"surface_range": hit[2], "range": hit[2] + self.lidar_centre_offset,
+                                "returns_xy": [hit[0], hit[1]]}
+        return out
+
+    def get_depth(self, x_min, y_min, x_max, y_max, depth):  # legacy; object_ranging.bbox_percentile_depth is a pinned copy
         """
         Calculate the estimated depth of a region in a depth image.
         This function extracts the depth values within a specified bounding box
