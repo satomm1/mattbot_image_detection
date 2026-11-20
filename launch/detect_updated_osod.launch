@@ -17,6 +17,14 @@
   <arg name="display_depth" default="true"/>
   <arg name="display_overlapped" default="false"/>
 
+  <!-- Which boxes are kept. Class-aware NMS at IoU 0.5 (the original: nms_agnostic:=true nms_iou:=0.1, which
+       merged people standing side by side); people at confidence 0.4 (original 0.6; other known classes 0.6,
+       unknown 0.25); unknown_dedupe drops "unknown" boxes duplicating a known-class box or lying inside a person. -->
+  <arg name="nms_agnostic" default="false"/>
+  <arg name="nms_iou" default="0.5"/>
+  <arg name="person_conf" default="0.4"/>
+  <arg name="unknown_dedupe" default="true"/>
+
   <!-- Frame input. image_queue_size 1 + a large buffer: each callback gets the NEWEST frame (rospy's defaults
        queue every frame, so detections ran about half a second late). sync_slop: max colour/depth stamp gap of
        a pair, one frame at 30 fps (the detector warns if colour and depth arrive but never pair: raise it). -->
@@ -51,6 +59,10 @@
     <param name="display_min_conf" value="$(arg display_min_conf)" />
     <param name="display_depth" value="$(arg display_depth)" />
     <param name="display_overlapped" value="$(arg display_overlapped)" />
+    <param name="nms_agnostic" value="$(arg nms_agnostic)" />
+    <param name="nms_iou" value="$(arg nms_iou)" />
+    <param name="person_conf" value="$(arg person_conf)" />
+    <param name="unknown_dedupe" value="$(arg unknown_dedupe)" />
     <param name="image_queue_size" value="$(arg image_queue_size)" />
     <param name="sync_slop" value="$(arg sync_slop)" />
     <param name="turning_source" value="$(arg turning_source)" />

@@ -23,6 +23,7 @@ import json
 import math
 import time
 
+from detection_filters import confident, drop_unknown_duplicates
 from detection_timing import PairStats, TurningGate
 from object_ranging import (OBJECT_WINDOW, PERSON_WINDOW, bbox_percentile_depth, box_width_height, effective_cx,
                             legacy_position, pixel_bearing, range_in_bearing_span, ray_point, scan_points_map,
@@ -34,7 +35,7 @@ PERSON_RANGE_SOURCES = ("camera", "lidar")
 KNOWN_OBJECT_THRESHOLD = 0.6
 UNKNOWN_OBJECT_THRESHOLD = 0.25
 
-IOU_THRESHOLD = 0.1  # Set the IoU threshold for NMS
+IOU_THRESHOLD = 0.1  # The original NMS IoU (class-agnostic); now ~nms_iou, default 0.5 class-aware
 
 LABEL_FONT_SCALE = 0.75
 LABEL_THICKNESS = 2
@@ -149,7 +150,28 @@ class Detector:
             self.labels = f.read().splitlines()
         print("Using model " + weights_file)
 
-        self.model_conf = min(KNOWN_OBJECT_THRESHOLD, UNKNOWN_OBJECT_THRESHOLD)
+        # Which boxes are kept (detection_filters).
+        #   nms_agnostic / nms_iou: class-aware NMS at IoU 0.5 by default. The original class-agnostic NMS at
+        #     IoU 0.1 (nms_agnostic:=true nms_iou:=0.1) dropped any box overlapping a higher-scoring one by 10 %:
+        #     people side by side became one, and people in front of a large object vanished.
+        #   person_conf: people need this confidence (0.4; the other known classes keep 0.6, unknown 0.25), so
+        #     distant and partly hidden people are found; the people tracker's confirmation absorbs the extra
+        #     false positives. 0.6 restores the original.
+        #   unknown_dedupe: drop an "unknown" box that duplicates a known-class box (IoU > unknown_dup_iou) or
+        #     lies mostly inside a person box (unknown_inside_person of its area), so a bag or an arm is not
+        #     reported as a static object. Needed with class-aware NMS, where classes no longer suppress each other.
+        self.nms_agnostic = bool(rospy.get_param('~nms_agnostic', False))
+        self.nms_iou = float(rospy.get_param('~nms_iou', 0.5))
+        self.person_conf = float(rospy.get_param('~person_conf', 0.4))
+        self.unknown_dedupe = bool(rospy.get_param('~unknown_dedupe', True))
+        self.unknown_dup_iou = float(rospy.get_param('~unknown_dup_iou', 0.5))
+        self.unknown_inside_person = float(rospy.get_param('~unknown_inside_person', 0.8))
+        self.person_classes = [i for i, name in enumerate(self.labels) if name == 'person']
+        self.class_conf = {c: self.person_conf for c in self.person_classes}
+        self.model_conf = min(KNOWN_OBJECT_THRESHOLD, UNKNOWN_OBJECT_THRESHOLD, self.person_conf)
+        rospy.loginfo("Detections: NMS %s IoU %.2f; confidence person %.2f, known %.2f, unknown %.2f; unknown dedupe %s",
+                      "class-agnostic" if self.nms_agnostic else "class-aware", self.nms_iou, self.person_conf,
+                      KNOWN_OBJECT_THRESHOLD, UNKNOWN_OBJECT_THRESHOLD, "on" if self.unknown_dedupe else "off")
 
         # # Load the CLIP model and tokenizer
         # clip_model = rospy.get_param('~clip_model', 'checkpoints/mobileclip_s0.pt')
@@ -346,7 +368,8 @@ class Detector:
             image = cv2.rotate(image, cv2.ROTATE_180)
 
         # Perform object detection using YOLO
-        results = self.model.predict(image, device=0, conf=self.model_conf, agnostic_nms=True, iou=IOU_THRESHOLD, verbose=False)
+        results = self.model.predict(image, device=0, conf=self.model_conf, agnostic_nms=self.nms_agnostic,
+                                     iou=self.nms_iou, verbose=False)
 
         detect_time = time.time()
         
@@ -355,18 +378,20 @@ class Detector:
         conf = results[0].boxes.conf.cpu().numpy()
         clss = results[0].boxes.cls.cpu().numpy().astype(int)
         num_detected = len(clss)
-        num_known_detected = np.sum((conf > KNOWN_OBJECT_THRESHOLD) & (clss != 0))
-        num_unknown_detected = np.sum((conf > UNKNOWN_OBJECT_THRESHOLD) & (clss == 0))
+        # The boxes kept: per-class confidence, then open-set duplicates removed (detection_filters)
+        keep = confident(conf, clss, unknown_class=0, unknown_conf=UNKNOWN_OBJECT_THRESHOLD,
+                         known_conf=KNOWN_OBJECT_THRESHOLD, class_conf=self.class_conf)
+        if self.unknown_dedupe:
+            keep = drop_unknown_duplicates(boxes, clss, keep, unknown_class=0, person_classes=self.person_classes,
+                                           dup_iou=self.unknown_dup_iou, inside_frac=self.unknown_inside_person)
 
         image_with_boxes = image.copy()  # Image to show all bounding boxes
         image_with_unknown_boxes = image.copy()  # Image to show only unknown bounding boxes
         clip_names = {}
         for i in range(num_detected):
 
-            # Make sure the confidence is above the threshold
-            if clss[i] == 0 and conf[i] < UNKNOWN_OBJECT_THRESHOLD:
-                continue
-            elif clss[i] != 0 and conf[i] < KNOWN_OBJECT_THRESHOLD:
+            # Make sure the box is kept (confidence above its class's threshold, not an open-set duplicate)
+            if not keep[i]:
                 continue
 
             # Draw box and label on the image
@@ -409,7 +434,7 @@ class Detector:
 
         data_dict = {}
         data_count = 0
-        if num_known_detected > 0 or num_unknown_detected > 0:
+        if keep.any():
             # Convert depth image to numpy array
             depth = np.frombuffer(depth_data.data, dtype=np.uint16).reshape(depth_data.height, depth_data.width)
 
@@ -425,7 +450,8 @@ class Detector:
             image_with_boxes,
             image_with_unknown_boxes) = self.filter_objects(boxes, conf, clss, num_detected, depth, trans, rot, 
                                             data_dict, data_count, detection_array, 
-                                            unknown_object_array, image_with_boxes, image_with_unknown_boxes, image, clip_names)
+                                            unknown_object_array, image_with_boxes, image_with_unknown_boxes, image, clip_names,
+                                            keep)
 
         # Publish the image with all bounding boxes
         image_msg = Image()
@@ -466,7 +492,7 @@ class Detector:
         # print('Elapsed time: {}'.format(end_time - start_time))
 
     def filter_objects(self, boxes, conf, clss, num_detected, depth, trans, rot, data_dict, data_count, detection_array, 
-                           unknown_object_array, image_with_boxes, unknown_image, image, clip_names):
+                           unknown_object_array, image_with_boxes, unknown_image, image, clip_names, keep=None):
 
         # Get location of camera in map frame
         x_camera = trans[0]
@@ -491,8 +517,11 @@ class Detector:
             
             class_score = conf[i]
 
-            # Skip objects without a high enough confidence score
-            if class_num <= 0 and class_score < UNKNOWN_OBJECT_THRESHOLD:
+            # Skip boxes not kept (confidence below its class's threshold, or an open-set duplicate)
+            if keep is not None:
+                if not keep[i]:
+                    continue
+            elif class_num <= 0 and class_score < UNKNOWN_OBJECT_THRESHOLD:
                 continue
             elif class_num != 0 and class_score < KNOWN_OBJECT_THRESHOLD:
                 continue
