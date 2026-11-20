@@ -197,7 +197,7 @@ class Detector:
         #                 robust = nearest substantial surface in a central (torso) window, centre one body
         #                 half-depth behind it.
         #   person_range_source: camera, or lidar = people ranged by the /scan cluster inside the box's
-        #                 bearing span (camera estimate as the fallback; works < 0.6 m and > 5 m).
+        #                 bearing span (camera estimate as the fallback; works < 0.6 m and beyond the camera's range).
         self.range_method = rospy.get_param('~range_method', 'legacy')
         self.person_range_source = rospy.get_param('~person_range_source', 'camera')
         if self.range_method not in RANGE_METHODS:
@@ -207,6 +207,10 @@ class Detector:
             rospy.logwarn("Unknown ~person_range_source %r, using camera (choices: %s)", self.person_range_source,
                           PERSON_RANGE_SOURCES)
             self.person_range_source = 'camera'
+        # Camera-ranged detections farther than this (forward depth, m) are dropped. 8 m: the range the learned
+        # planner's camera was trained on (the Astra's rated maximum); the original limit was 5 m. Beyond about 5 m
+        # the depth is noisier (people are ranged by the LiDAR when person_range_source is lidar).
+        self.max_camera_depth = float(rospy.get_param('~max_camera_depth', 8.0))
         self.person_centre_offset = rospy.get_param('~person_centre_offset', 0.15)  # m behind the torso surface
         self.lidar_centre_offset = rospy.get_param('~lidar_centre_offset', 0.10)    # m behind the scan returns
         self.lidar_max_range = rospy.get_param('~lidar_max_range', 8.0)             # m (people ranged by LiDAR)
@@ -248,6 +252,7 @@ class Detector:
 
         # Create the publisher that will show image with bounding boxes
         self.boxes_publisher = rospy.Publisher('/camera/color/image_with_boxes', Image, queue_size=1)
+        self.annotate = False  # this frame draws the annotated image (someone subscribes to it)
 
         # Create the publishers that send known objects and unknown objects
         self.detected_object_publisher = rospy.Publisher('/detected_objects', DetectedObjectArray, queue_size=10)
@@ -385,8 +390,12 @@ class Detector:
             keep = drop_unknown_duplicates(boxes, clss, keep, unknown_class=0, person_classes=self.person_classes,
                                            dup_iou=self.unknown_dup_iou, inside_frac=self.unknown_inside_person)
 
-        image_with_boxes = image.copy()  # Image to show all bounding boxes
-        image_with_unknown_boxes = image.copy()  # Image to show only unknown bounding boxes
+        # Draw and publish the annotated image only when someone subscribes to it (rviz, image_view): copying,
+        # drawing and sending a 0.9 MB frame on every detection is otherwise wasted. Nothing is drawn on the image
+        # sent with unknown objects, so it is the frame itself.
+        self.annotate = self.boxes_publisher.get_num_connections() > 0
+        image_with_boxes = image.copy() if self.annotate else image  # Image to show all bounding boxes
+        image_with_unknown_boxes = image  # Image sent with the unknown objects (not drawn on)
         clip_names = {}
         for i in range(num_detected):
 
@@ -397,7 +406,7 @@ class Detector:
             # Draw box and label on the image
             box = boxes[i]
             x1, y1, x2, y2 = int(box[0]), int(box[1]), int(box[2]), int(box[3])
-            draw = conf[i] >= self.display_min_conf
+            draw = self.annotate and conf[i] >= self.display_min_conf
             if draw:
                 cv2.rectangle(image_with_boxes, (x1, y1), (x2, y2), COLORS[clss[i]], 2)
 
@@ -453,15 +462,16 @@ class Detector:
                                             unknown_object_array, image_with_boxes, image_with_unknown_boxes, image, clip_names,
                                             keep)
 
-        # Publish the image with all bounding boxes
-        image_msg = Image()
-        image_msg.data = image_with_boxes.tobytes()
-        image_msg.height = image_with_boxes.shape[0]
-        image_msg.width = image_with_boxes.shape[1]
-        image_msg.encoding = 'rgb8'
-        image_msg.step = 3 * image_with_boxes.shape[1]
-        image_msg.header.stamp = rospy.Time.now()
-        self.boxes_publisher.publish(image_msg)
+        # Publish the image with all bounding boxes (only drawn when someone subscribes)
+        if self.annotate:
+            image_msg = Image()
+            image_msg.data = image_with_boxes.tobytes()
+            image_msg.height = image_with_boxes.shape[0]
+            image_msg.width = image_with_boxes.shape[1]
+            image_msg.encoding = 'rgb8'
+            image_msg.step = 3 * image_with_boxes.shape[1]
+            image_msg.header.stamp = rospy.Time.now()
+            self.boxes_publisher.publish(image_msg)
 
         # Publish the known objects
         self.detected_object_publisher.publish(detection_array)
@@ -547,7 +557,7 @@ class Detector:
             # People ranged by the LiDAR (its cluster, consistent with the camera depth when there is one)
             lidar_hit = None
             if is_person and self.person_range_source == 'lidar' and scan_pts is not None:
-                camera_ok = 0 < estimated_depth <= 5
+                camera_ok = 0 < estimated_depth <= self.max_camera_depth
                 lidar_hit = range_in_bearing_span(
                     scan_pts, x_camera, y_camera, theta_camera,
                     pixel_bearing(x2, cx_eff, self.fx), pixel_bearing(x1, cx_eff, self.fx),
@@ -555,7 +565,7 @@ class Detector:
                     prefer_range=self._camera_range(x_center, estimated_depth, cx_eff) if camera_ok else None)
 
             # Write the estimated depth on the image
-            draw = class_score >= self.display_min_conf
+            draw = self.annotate and class_score >= self.display_min_conf
             text_offset = LABEL_HEIGHT + 10 if label_inside_box(y1) else 0  # Move below the label if it is inside the box
             if draw and self.display_depth:
                 depth_label = 'Depth: {:.2f} m'.format(estimated_depth)
@@ -564,13 +574,13 @@ class Detector:
                 image_with_boxes = cv2.putText(image_with_boxes, depth_label, (x1, y1+15+text_offset),cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1, cv2.LINE_AA)
 
             if lidar_hit is not None:
-                # The LiDAR range replaces the camera depth (and its 0.6-5 m validity window) for this person
+                # The LiDAR range replaces the camera depth (and its validity window) for this person
                 lidar_range = lidar_hit[2]
                 lidar_bearing = pixel_bearing(x_center, cx_eff, self.fx)
                 estimated_depth = lidar_range * math.cos(lidar_bearing)  # forward depth, for the width/height
 
-            # Skip objects with invalid depth values (0) or too far away (> 5 meters) since they are unreliable
-            if lidar_hit is None and (estimated_depth == 0 or estimated_depth > 5):
+            # Skip objects with invalid depth values (0) or too far away (> max_camera_depth) since they are unreliable
+            if lidar_hit is None and (estimated_depth == 0 or estimated_depth > self.max_camera_depth):
                 new_object = DetectedObjectWithImage()
                 new_object.class_name = class_name
                 new_object.probability = class_score

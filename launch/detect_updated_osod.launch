@@ -40,6 +40,9 @@
        range_method: robust (nearest substantial surface in a central/torso window, corrected centre) | legacy (the original estimate)
        person_range_source: lidar (people ranged by the /scan cluster in the box's bearing span, camera fallback) | camera
        publish_range_debug: every method's estimate side by side on /detected_objects_range_debug (JSON) -->
+  <!-- max_camera_depth: camera-ranged detections beyond this forward depth (m) are dropped; 8 = the learned planner's
+       trained camera range and the Astra's rated maximum (the original limit was 5) -->
+  <arg name="max_camera_depth" default="8.0"/>
   <arg name="range_method" default="robust"/>
   <arg name="person_range_source" default="lidar"/>
   <arg name="publish_range_debug" default="false"/>
@@ -68,6 +71,7 @@
     <param name="turning_source" value="$(arg turning_source)" />
     <param name="turning_threshold" value="$(arg turning_threshold)" />
     <param name="turning_cooldown" value="$(arg turning_cooldown)" />
+    <param name="max_camera_depth" value="$(arg max_camera_depth)" />
     <param name="range_method" value="$(arg range_method)" />
     <param name="person_range_source" value="$(arg person_range_source)" />
     <param name="publish_range_debug" value="$(arg publish_range_debug)" />
