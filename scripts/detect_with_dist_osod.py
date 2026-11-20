@@ -23,7 +23,8 @@ import json
 import math
 import time
 
-from detection_filters import confident, drop_unknown_duplicates
+from detection_filters import (confident, drop_unknown_duplicates, heights_above_floor, line_of_sight_clear,
+                               stands_off_floor)
 from detection_timing import PairStats, TurningGate
 from object_ranging import (OBJECT_WINDOW, PERSON_WINDOW, bbox_percentile_depth, box_width_height, effective_cx,
                             legacy_position, pixel_bearing, range_in_bearing_span, ray_point, scan_points_map,
@@ -166,12 +167,31 @@ class Detector:
         self.unknown_dedupe = bool(rospy.get_param('~unknown_dedupe', True))
         self.unknown_dup_iou = float(rospy.get_param('~unknown_dup_iou', 0.5))
         self.unknown_inside_person = float(rospy.get_param('~unknown_inside_person', 0.8))
+        # Phantom static objects (detection_filters): non-person detections must
+        #   floor_check: rise floor_min_height above the floor on at least floor_min_frac of their pixels near
+        #     the object's depth (back-projected through the camera's height from TF and ~camera_pitch_deg,
+        #     positive = looking down), so rugs, floor patterns, shadows and floor reflections are dropped;
+        #   los_check: be visible: the ray from the camera to the object's near surface must not cross a wall of
+        #     the static map (los_margin m short of it), so reflections in glass are dropped. People are exempt
+        #     unless los_check_people (a door the map shows closed may be open).
+        self.floor_check = bool(rospy.get_param('~floor_check', True))
+        self.floor_min_height = float(rospy.get_param('~floor_min_height', 0.15))
+        self.floor_min_frac = float(rospy.get_param('~floor_min_frac', 0.10))
+        self.camera_pitch = math.radians(float(rospy.get_param('~camera_pitch_deg', 0.0)))
+        self.los_check = bool(rospy.get_param('~los_check', True))
+        self.los_check_people = bool(rospy.get_param('~los_check_people', False))
+        self.los_margin = float(rospy.get_param('~los_margin', 0.15))
+        self.camera_height = None  # base_footprint -> camera_link z, looked up once (a fixed joint)
+        self.n_dropped_floor = self.n_dropped_los = 0
         self.person_classes = [i for i, name in enumerate(self.labels) if name == 'person']
         self.class_conf = {c: self.person_conf for c in self.person_classes}
         self.model_conf = min(KNOWN_OBJECT_THRESHOLD, UNKNOWN_OBJECT_THRESHOLD, self.person_conf)
-        rospy.loginfo("Detections: NMS %s IoU %.2f; confidence person %.2f, known %.2f, unknown %.2f; unknown dedupe %s",
+        rospy.loginfo("Detections: NMS %s IoU %.2f; confidence person %.2f, known %.2f, unknown %.2f; unknown dedupe %s; "
+                      "floor check %s (>= %.2f m on %.0f %% of pixels, pitch %.1f deg); line-of-sight check %s",
                       "class-agnostic" if self.nms_agnostic else "class-aware", self.nms_iou, self.person_conf,
-                      KNOWN_OBJECT_THRESHOLD, UNKNOWN_OBJECT_THRESHOLD, "on" if self.unknown_dedupe else "off")
+                      KNOWN_OBJECT_THRESHOLD, UNKNOWN_OBJECT_THRESHOLD, "on" if self.unknown_dedupe else "off",
+                      "on" if self.floor_check else "off", self.floor_min_height, 100 * self.floor_min_frac,
+                      math.degrees(self.camera_pitch), "on" if self.los_check else "off")
 
         # # Load the CLIP model and tokenizer
         # clip_model = rospy.get_param('~clip_model', 'checkpoints/mobileclip_s0.pt')
@@ -271,6 +291,9 @@ class Detector:
         # self.map keeps track of the original map plus objects that have been detected
         # so that we don't need to query the LLM multiple times for the same object
         self.map_msg = rospy.wait_for_message("/map", OccupancyGrid)
+        # The static map's walls, for the line-of-sight check (occupancy >= 50; unknown cells are not walls)
+        self.static_occupied = (np.asarray(self.map_msg.data, dtype=np.int16).reshape(
+            self.map_msg.info.height, self.map_msg.info.width) >= 50)
         self.map = StochOccupancyGrid2D(self.map_msg.info.resolution, 
                                              self.map_msg.info.width, 
                                             self.map_msg.info.height,
@@ -612,6 +635,16 @@ class Detector:
             if object_height < 0.1 or object_width < 0.1:
                 continue  # Skip objects that are too small
 
+            # Phantom static objects: something flat on the floor, or seen through a wall (a reflection)
+            phantom = self._phantom(is_person, depth, x1, y1, x2, y2, estimated_depth, x_camera, y_camera,
+                                    theta_camera, x_map, y_map)
+            if phantom == 'floor':
+                self.n_dropped_floor += 1
+                continue
+            if phantom == 'los':
+                self.n_dropped_los += 1
+                continue
+
             if self.range_debug_publisher is not None:
                 range_debug.append(self._range_debug(class_name, x1, y1, x2, y2, depth, x_camera, y_camera,
                                                      theta_camera, cx_eff, scan_pts, range_source, x_map, y_map))
@@ -711,6 +744,49 @@ class Detector:
                 "detections": range_debug})))
 
         return data_dict, data_count, detection_array, unknown_object_array, image_with_boxes, unknown_image
+
+    # ------------------------------------------------------------------ phantom-object checks (detection_filters)
+
+    def _camera_height_above_floor(self):
+        """The optical centre's height above the floor (base_footprint -> camera_link z), once; None until TF has it."""
+        if self.camera_height is None:
+            try:
+                (t, _) = self.tf_listener.lookupTransform('/base_footprint', '/camera_link', rospy.Time(0))
+                self.camera_height = float(t[2])
+                rospy.loginfo("Detector: camera %.3f m above the floor (floor check)", self.camera_height)
+            except (tf.Exception, tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
+                return None
+        return self.camera_height
+
+    def _phantom(self, is_person, depth, x1, y1, x2, y2, estimated_depth, x_camera, y_camera, theta_camera,
+                 x_map, y_map):
+        """'floor' or 'los' if a non-person detection fails a phantom check, else None (kept)."""
+        if is_person and not self.los_check_people:
+            return None
+        if not is_person and self.floor_check and estimated_depth > 0:
+            cam_h = self._camera_height_above_floor()
+            if cam_h is not None:
+                cy_eff = (depth.shape[0] - 1) - self.cy if self.tall else self.cy
+                heights = heights_above_floor(depth, x1, y1, x2, y2, estimated_depth, self.fy, cy_eff, cam_h,
+                                              self.camera_pitch)
+                if stands_off_floor(heights, self.floor_min_height, self.floor_min_frac) is False:
+                    return 'floor'
+        if self.los_check and estimated_depth > 0:
+            dx, dy = x_map - x_camera, y_map - y_camera
+            dist = math.hypot(dx, dy)
+            # The near surface along the ray to the object: its measured forward depth over the cosine of the
+            # ray's angle off the optical axis (not centre minus half the width: a wide object's centre-to-edge
+            # distance says nothing about how far its surface is), stopped los_margin short of it.
+            cos_off = (dx * math.cos(theta_camera) + dy * math.sin(theta_camera)) / dist if dist > 0 else 1.0
+            near = estimated_depth / max(cos_off, 0.2) - self.los_margin
+            if dist > 0 and near > 0:
+                end = (x_camera + dx * near / dist, y_camera + dy * near / dist)
+                info = self.map_msg.info
+                if not line_of_sight_clear(self.static_occupied, info.resolution,
+                                           (info.origin.position.x, info.origin.position.y),
+                                           (x_camera, y_camera), end):
+                    return 'los'
+        return None
 
     # ------------------------------------------------------------------ ranging helpers (object_ranging)
 
@@ -890,7 +966,9 @@ class Detector:
         g = s.summary()
         if g is not None:
             rospy.loginfo_throttle(60.0, "Detector: colour/depth pair gap median %.1f ms, max %.1f ms; "
-                                   "%d frames skipped while turning" % (1e3 * g[0], 1e3 * g[1], self.n_skipped_turning))
+                                   "%d frames skipped while turning; phantom objects dropped: %d flat on the floor, "
+                                   "%d behind a wall" % (1e3 * g[0], 1e3 * g[1], self.n_skipped_turning,
+                                                         self.n_dropped_floor, self.n_dropped_los))
 
     def cmd_vel_callback(self, msg):
         """

@@ -25,6 +25,14 @@
   <arg name="person_conf" default="0.4"/>
   <arg name="unknown_dedupe" default="true"/>
 
+  <!-- Phantom static objects (non-person detections): floor_check drops anything not rising floor_min_height (m)
+       above the floor (rugs, floor patterns, shadows; needs camera_pitch_deg right, positive = looking down);
+       los_check drops anything seen through a wall of the static map (reflections in glass). -->
+  <arg name="floor_check" default="true"/>
+  <arg name="floor_min_height" default="0.15"/>
+  <arg name="camera_pitch_deg" default="0.0"/>
+  <arg name="los_check" default="true"/>
+
   <!-- Frame input. image_queue_size 1 + a large buffer: each callback gets the NEWEST frame (rospy's defaults
        queue every frame, so detections ran about half a second late). sync_slop: max colour/depth stamp gap of
        a pair, one frame at 30 fps (the detector warns if colour and depth arrive but never pair: raise it). -->
@@ -66,6 +74,10 @@
     <param name="nms_iou" value="$(arg nms_iou)" />
     <param name="person_conf" value="$(arg person_conf)" />
     <param name="unknown_dedupe" value="$(arg unknown_dedupe)" />
+    <param name="floor_check" value="$(arg floor_check)" />
+    <param name="floor_min_height" value="$(arg floor_min_height)" />
+    <param name="camera_pitch_deg" value="$(arg camera_pitch_deg)" />
+    <param name="los_check" value="$(arg los_check)" />
     <param name="image_queue_size" value="$(arg image_queue_size)" />
     <param name="sync_slop" value="$(arg sync_slop)" />
     <param name="turning_source" value="$(arg turning_source)" />
