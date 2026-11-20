@@ -5,7 +5,7 @@ from geometry_msgs.msg import PoseWithCovariance, Pose, Twist
 from mattbot_image_detection.msg import DetectedObject, DetectedObjectArray, DetectedObjectWithImage, DetectedObjectWithImageArray
 from mattbot_image_detection.msg import LabeledObject, LabeledObjectArray
 import message_filters
-from nav_msgs.msg import OccupancyGrid
+from nav_msgs.msg import OccupancyGrid, Odometry
 from geometry_msgs.msg import Point
 from mattbot_dds.msg import AgentLocation
 
@@ -23,6 +23,7 @@ import json
 import math
 import time
 
+from detection_timing import PairStats, TurningGate
 from object_ranging import (OBJECT_WINDOW, PERSON_WINDOW, bbox_percentile_depth, box_width_height, effective_cx,
                             legacy_position, pixel_bearing, range_in_bearing_span, ray_point, scan_points_map,
                             surface_position, window_cluster_depth)
@@ -199,12 +200,23 @@ class Detector:
         rospy.loginfo("Object ranging: range_method=%s person_range_source=%s%s", self.range_method,
                       self.person_range_source, " (debug on)" if self.publish_range_debug else "")
 
-        # These keep track of whether the robot is turning or not,
-        # The depth images produced when turning are not reliable, so we need to ignore them
-        self.turning_threshold = rospy.get_param('~turning_threshold', 0.15)  # |angular.z| (rad/s) above which the robot is turning
-        self.turning_cooldown = rospy.get_param('~turning_cooldown', 0.25)  # Keep ignoring frames this long after a turn (s)
+        # Skip frames taken while the robot turns fast: the colour and depth images of a pair are taken at
+        # slightly different times, so a fast turn shifts one against the other (detection_timing.TurningGate).
+        #   turning_source: odom (default) = the MEASURED yaw rate at the image time; cmd = the original gate on
+        #   the commanded /cmd_vel rate (it fires on every small steering correction, and its state freezes
+        #   while /cmd_vel is silent).
+        self.turning_source = rospy.get_param('~turning_source', 'odom')
+        if self.turning_source not in ('odom', 'cmd'):
+            rospy.logwarn("Unknown ~turning_source %r, using odom (choices: odom, cmd)", self.turning_source)
+            self.turning_source = 'odom'
+        self.turning_threshold = rospy.get_param('~turning_threshold', 0.8)  # |yaw rate| (rad/s) above which the robot is turning
+        self.turning_cooldown = rospy.get_param('~turning_cooldown', 0.15)  # Keep ignoring frames this long after a turn (s)
         self.is_turning = False
         self.time_since_turning = 0
+        self.turning_gate = TurningGate(self.turning_threshold, self.turning_cooldown)
+        self.n_skipped_turning = 0
+        if self.turning_source == 'odom':
+            rospy.Subscriber(rospy.get_param('~odom_topic', '/odom'), Odometry, self.odom_callback, queue_size=20)
 
         # Keep track if static so don't call LLM repeatedly
         self.is_static = False
@@ -246,11 +258,27 @@ class Detector:
         # Subscribe to  the cmd_vel topic to determine if the robot is turning or not
         self.cmd_vel_subscriber = rospy.Subscriber('/cmd_vel', Twist, self.cmd_vel_callback, queue_size=1)    
 
-        # Subscribe to the RGB and depth images, and create a time synchronizer
-        self.rbg_sub = message_filters.Subscriber('/camera/color/image_raw', Image)
-        self.depth_sub = message_filters.Subscriber('/camera/depth/image_raw', Image)
-        self.ts = message_filters.ApproximateTimeSynchronizer([self.rbg_sub, self.depth_sub], 1, 0.1)
+        # Subscribe to the RGB and depth images, and create a time synchronizer.
+        # queue_size 1 and a large buff_size: inference is slower than the camera's 30 fps, so with rospy's
+        # defaults (unbounded queue, 64 kB buffer for 0.9 MB frames) every frame waits behind the backlog and
+        # detections are about half a second old. With them, each callback gets the newest frame.
+        image_queue = int(rospy.get_param('~image_queue_size', 1))
+        image_buff = int(rospy.get_param('~image_buff_size', 2 ** 24))
+        sub_kw = dict(queue_size=image_queue if image_queue > 0 else None, buff_size=image_buff)
+        # sync_slop: the most the colour and depth stamps of a pair may differ (s). One frame at 30 fps: a
+        # looser pairing shifts the depth image against the colour boxes whenever anything moves.
+        self.sync_slop = float(rospy.get_param('~sync_slop', 0.033))
+        self.pair_stats = PairStats()
+        self.rbg_sub = message_filters.Subscriber('/camera/color/image_raw', Image, **sub_kw)
+        self.depth_sub = message_filters.Subscriber('/camera/depth/image_raw', Image, **sub_kw)
+        self.rbg_sub.registerCallback(self._count_rgb)
+        self.depth_sub.registerCallback(self._count_depth)
+        self.ts = message_filters.ApproximateTimeSynchronizer([self.rbg_sub, self.depth_sub], 1, self.sync_slop)
         self.ts.registerCallback(self.unifiedCallback)
+        self._pairing_counts = (0, 0, 0)
+        rospy.Timer(rospy.Duration(5.0), self._check_pairing)
+        rospy.loginfo("Image input: queue_size=%s buff_size=%d sync_slop=%.3f s; turning gate: %s > %.2f rad/s",
+                      sub_kw['queue_size'], image_buff, self.sync_slop, self.turning_source, self.turning_threshold)
 
         # Subscribe to other agent locations
         self.agent_location_subscriber = rospy.Subscriber('/agent_location', AgentLocation, self.agent_location_callback, queue_size=10)
@@ -284,16 +312,20 @@ class Detector:
             - The function uses ROS (Robot Operating System) for message passing and transformations.
             - The function assumes that the YOLO model, ROS publishers, and other necessary components are properly initialized.
         """
-        if self.is_turning:
-            # Can't rely on data if robot is turning
-            return
-
-        start_time = time.time()
-
         # The time the image was taken: detections are stamped with it, and the camera pose is looked up
         # at it, so a tracker downstream (people_tracker_node) can estimate velocities and compensate for
         # the inference latency. Falls back to the latest transform (the old behaviour) if TF lacks that time.
         image_stamp = rgb_data.header.stamp if rgb_data.header.stamp.to_sec() > 0.0 else rospy.Time.now()
+        self.pair_stats.add_pair(rgb_data.header.stamp.to_sec(), depth_data.header.stamp.to_sec())
+
+        turning = (self.turning_gate.turning(image_stamp.to_sec()) if self.turning_source == 'odom'
+                   else self.is_turning)
+        if turning:
+            # Can't rely on the colour/depth alignment while the robot turns fast
+            self.n_skipped_turning += 1
+            return
+
+        start_time = time.time()
         self.current_image_stamp = image_stamp
 
         # Get the transform from map to camera_link
@@ -793,6 +825,33 @@ class Detector:
         #     self.text_features = self.clip_model.encode_text(self.text)
         #     self.text_features /= self.text_features.norm(dim=-1, keepdim=True)
 
+
+    def odom_callback(self, msg):
+        """Measured yaw rate for the turning gate (turning_source: odom)."""
+        stamp = msg.header.stamp.to_sec() if msg.header.stamp.to_sec() > 0.0 else rospy.Time.now().to_sec()
+        self.turning_gate.add_odom(stamp, msg.twist.twist.angular.z)
+
+    def _count_rgb(self, _msg):
+        self.pair_stats.n_rgb += 1
+
+    def _count_depth(self, _msg):
+        self.pair_stats.n_depth += 1
+
+    def _check_pairing(self, _event):
+        """Every 5 s: warn if colour and depth both arrive but never pair (sync_slop tighter than the
+        camera's stamp offset); log the pairing gaps and the frames skipped for turning once a minute."""
+        s = self.pair_stats
+        rgb, dep, pairs = s.n_rgb - self._pairing_counts[0], s.n_depth - self._pairing_counts[1], \
+            s.n_pairs - self._pairing_counts[2]
+        self._pairing_counts = (s.n_rgb, s.n_depth, s.n_pairs)
+        if rgb > 0 and dep > 0 and pairs == 0:
+            rospy.logwarn("Detector: %d colour and %d depth images in 5 s but no pairs within sync_slop %.3f s; "
+                          "the camera's colour and depth stamps are further apart: raise ~sync_slop",
+                          rgb, dep, self.sync_slop)
+        g = s.summary()
+        if g is not None:
+            rospy.loginfo_throttle(60.0, "Detector: colour/depth pair gap median %.1f ms, max %.1f ms; "
+                                   "%d frames skipped while turning" % (1e3 * g[0], 1e3 * g[1], self.n_skipped_turning))
 
     def cmd_vel_callback(self, msg):
         """

@@ -12,11 +12,20 @@
   <arg name="save_dir" default="$(find mattbot_image_detection)/images/"/>
   <arg name="use_llm_for_images" default="false"/>
 
-  <!-- Display options for /camera/color/image_with_boxes, and turning gate for processing frames -->
+  <!-- Display options for /camera/color/image_with_boxes -->
   <arg name="display_min_conf" default="0.5"/>
   <arg name="display_depth" default="true"/>
   <arg name="display_overlapped" default="false"/>
-  <arg name="turning_threshold" default="0.10"/>
+
+  <!-- Frame input. image_queue_size 1 + a large buffer: each callback gets the NEWEST frame (rospy's defaults
+       queue every frame, so detections ran about half a second late). sync_slop: max colour/depth stamp gap of
+       a pair, one frame at 30 fps (the detector warns if colour and depth arrive but never pair: raise it). -->
+  <arg name="image_queue_size" default="1"/>
+  <arg name="sync_slop" default="0.033"/>
+  <!-- Turning gate: skip frames while the robot turns fast (colour/depth misalign). turning_source odom = the
+       measured yaw rate at the image time; cmd = the original gate on /cmd_vel (use turning_threshold 0.10). -->
+  <arg name="turning_source" default="odom"/>
+  <arg name="turning_threshold" default="0.8"/>
   <arg name="turning_cooldown" default="0.15"/>
 
   <!-- How detections are placed (object_ranging). Defaults: robust depth, LiDAR for people.
@@ -42,6 +51,9 @@
     <param name="display_min_conf" value="$(arg display_min_conf)" />
     <param name="display_depth" value="$(arg display_depth)" />
     <param name="display_overlapped" value="$(arg display_overlapped)" />
+    <param name="image_queue_size" value="$(arg image_queue_size)" />
+    <param name="sync_slop" value="$(arg sync_slop)" />
+    <param name="turning_source" value="$(arg turning_source)" />
     <param name="turning_threshold" value="$(arg turning_threshold)" />
     <param name="turning_cooldown" value="$(arg turning_cooldown)" />
     <param name="range_method" value="$(arg range_method)" />
